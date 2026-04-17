@@ -1,10 +1,11 @@
 import asyncio
-import os
 import signal
 
 from core.event_bus import Event, EventBus
 from core.health_monitor import HealthMonitor
 from core.logger import get_logger, setup_logger
+import os
+
 from analytics.correlation import CorrelationEngine
 from analytics.mtf_confluence import MTFConfluenceEngine
 from analytics.smartmoney import SmartMoneyEngine
@@ -15,6 +16,11 @@ from data.bingx_ws import BingXWebSocket
 from data.ob_processor import OBProcessor
 from data.rate_limit_guard import RateLimitGuard
 from data.tf_aggregator import TFAggregator
+from execution.bingx_private import BingXPrivateClient
+from execution.execution_engine import ExecutionEngine, ExecutionMode
+from execution.risk_guard import RiskConfig, RiskGuard
+from signals.anomaly_detector import AnomalyDetector
+from signals.signal_engine import SignalEngine
 from storage.database import close_db, init_db
 from storage.repositories.candles_repo import CandlesRepository
 from storage.repositories.orderbook_repo import OrderBookRepository
@@ -67,6 +73,18 @@ async def main() -> None:
     volume_engine = VolumeEngine(event_bus)
     mtf_engine = MTFConfluenceEngine(event_bus)
     correlation_engine = CorrelationEngine(event_bus, symbols)
+    signal_engine = SignalEngine(event_bus)
+    anomaly_detector = AnomalyDetector(event_bus)
+    risk_guard = RiskGuard(RiskConfig())
+    api_client = BingXPrivateClient(
+        api_key=os.getenv("BINGX_API_KEY", ""),
+        api_secret=os.getenv("BINGX_API_SECRET", ""),
+        dry_run=os.getenv("TRADING_MODE", "paper") != "live",
+    )
+    execution_engine = ExecutionEngine(
+        event_bus, risk_guard, api_client,
+        initial_capital=float(os.getenv("INITIAL_CAPITAL", "10000")),
+    )
 
     # Снимки стакана → БД
     event_bus.subscribe("ob.snapshot", lambda e: ob_repo.save_from_event(e.data))
@@ -89,6 +107,9 @@ async def main() -> None:
     await mtf_engine.start()
     mtf_engine.subscribe_ta_for_symbols(symbols)
     await correlation_engine.start()
+    await signal_engine.start()
+    await anomaly_detector.start()
+    await execution_engine.start()
     await ws_client.start()
 
     log.info("Система запущена. Нажмите Ctrl+C для остановки.")
@@ -109,6 +130,9 @@ async def main() -> None:
 
     log.info("Получен сигнал остановки...")
     await ws_client.stop()
+    await execution_engine.stop()
+    await anomaly_detector.stop()
+    await signal_engine.stop()
     await correlation_engine.stop()
     await mtf_engine.stop()
     await volume_engine.stop()

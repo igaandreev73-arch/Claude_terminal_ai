@@ -38,6 +38,36 @@
 
 ## Записи
 
+### [2026-04-17] Phase 1-E: Signal Engine + Execution Engine
+
+**Что сделано:**
+- `signals/signal_engine.py` — Signal Engine: генерирует сигналы из `mtf.score.updated` (score ≥ 60) и `correlation.divergence`. TTL 5 минут, дедупликация по symbol+direction, `get_queue()`, `mark_executed()`, `tick()`. Публикует `signal.generated/expired/executed`
+- `signals/anomaly_detector.py` — Anomaly Detector: flash crash (> 3% за 3 свечи), price spike (> 3% за свечу), OB манипуляция (spoof + высокий imbalance), slippage аномалия. Cooldown 60с против спама. Публикует `anomaly.flash_crash/price_spike/ob_manip/slippage`
+- `execution/risk_guard.py` — Risk Guard: фиксированный риск 1%/сделку, дневной стоп-лосс 5%, макс. 3 позиции, макс. плечо 10x. Формула размера: `size = capital × risk_pct / sl_pct × leverage`
+- `execution/bingx_private.py` — Private API client: HMAC-SHA256 подпись, market/limit ордера, close_position, get_positions, get_balance. `dry_run=True` по умолчанию — логирует вместо исполнения
+- `execution/execution_engine.py` — Execution Engine: три режима (AUTO/SEMI_AUTO/ALERT_ONLY), переключение без перезапуска. Semi-auto: таймаут 30с, `confirm()`/`reject()`. Реагирует на anomaly.flash_crash (блокирует входы 5 мин), anomaly.ob_manip (задержка 10с)
+- `main.py` — подключены все новые модули; `TRADING_MODE=paper` (dry_run), `INITIAL_CAPITAL` из env
+
+**Решения:**
+- `bus.subscribe` в тестах требует `await bus.start()` иначе dispatch loop не запущен и события не доставляются — фиксили в 3 тестах
+- `dry_run=True` по умолчанию — реальный BingX API вызывается только при `TRADING_MODE=live`
+- `_clear_flash_crash` через `call_later(300)` — не блокирует event loop при 5-минутной паузе
+
+**Отложено:**
+- UI для подтверждения semi-auto — Phase 1-F
+- Реальная интеграция SL/TP через API BingX — после тестирования paper trading
+
+Тесты:
+  Unit:        ✅ 191/191
+  Integration: —
+  Smoke:       —
+  Покрытие:    н/д
+
+Коммит: `—`
+Следующий шаг: Phase 1-F — UI (Electron + React)
+
+---
+
 ### [2026-04-17] Phase 1-D: Backtester & Strategy Builder
 
 **Что сделано:**

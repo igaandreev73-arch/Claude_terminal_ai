@@ -38,6 +38,35 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-17] Phase 1-E: Signal Engine + Execution Engine
+
+**Done:**
+- `signals/signal_engine.py` — Signal Engine: generates signals from `mtf.score.updated` (score ≥ 60) and `correlation.divergence`. 5-minute TTL, deduplication by symbol+direction, `get_queue()`, `mark_executed()`, `tick()`. Publishes `signal.generated/expired/executed`
+- `signals/anomaly_detector.py` — Anomaly Detector: flash crash (>3% over 3 candles), price spike (>3% in one candle), OB manipulation (spoof + high imbalance), slippage anomaly. 60s cooldown. Publishes `anomaly.flash_crash/price_spike/ob_manip/slippage`
+- `execution/risk_guard.py` — Risk Guard: fixed 1% risk/trade, 5% daily stop, max 3 positions, max 10x leverage. Size formula: `size = capital × risk_pct / sl_pct × leverage`
+- `execution/bingx_private.py` — Private API client: HMAC-SHA256 signing, market/limit orders, close position, get positions/balance. `dry_run=True` by default — logs without executing
+- `execution/execution_engine.py` — Three modes (AUTO/SEMI_AUTO/ALERT_ONLY), switchable without restart. Semi-auto: 30s timeout, `confirm()`/`reject()`. Reacts to flash_crash (blocks 5 min) and ob_manip (10s delay)
+- `main.py` — all new modules wired; `TRADING_MODE=paper` (dry_run), `INITIAL_CAPITAL` from env
+
+**Decisions:**
+- Tests need `await bus.start()` otherwise dispatch loop is not running — events queued but never delivered to subscribers
+- `dry_run=True` by default — real BingX API only called when `TRADING_MODE=live`
+
+**Postponed:**
+- Semi-auto confirmation UI — Phase 1-F
+- Real SL/TP via BingX API — after paper trading validation
+
+Tests:
+  Unit:        ✅ 191/191
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-F — UI (Electron + React)
+
+---
+
 ### [2026-04-17] Phase 1-D: Backtester & Strategy Builder
 
 **Done:**
