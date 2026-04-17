@@ -22,6 +22,7 @@ from execution.risk_guard import RiskConfig, RiskGuard
 from signals.anomaly_detector import AnomalyDetector
 from signals.signal_engine import SignalEngine
 from storage.database import close_db, init_db
+from ui.ws_server import WSServer
 from storage.repositories.candles_repo import CandlesRepository
 from storage.repositories.orderbook_repo import OrderBookRepository
 
@@ -85,6 +86,11 @@ async def main() -> None:
         event_bus, risk_guard, api_client,
         initial_capital=float(os.getenv("INITIAL_CAPITAL", "10000")),
     )
+    ws_server = WSServer(
+        event_bus, signal_engine, execution_engine,
+        host=os.getenv("WS_HOST", "localhost"),
+        port=int(os.getenv("WS_PORT", "8765")),
+    )
 
     # Снимки стакана → БД
     event_bus.subscribe("ob.snapshot", lambda e: ob_repo.save_from_event(e.data))
@@ -110,6 +116,7 @@ async def main() -> None:
     await signal_engine.start()
     await anomaly_detector.start()
     await execution_engine.start()
+    await ws_server.start()
     await ws_client.start()
 
     log.info("Система запущена. Нажмите Ctrl+C для остановки.")
@@ -130,6 +137,7 @@ async def main() -> None:
 
     log.info("Получен сигнал остановки...")
     await ws_client.stop()
+    await ws_server.stop()
     await execution_engine.stop()
     await anomaly_detector.stop()
     await signal_engine.stop()

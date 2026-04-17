@@ -38,6 +38,45 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-17] Phase 1-F: UI — Electron + React + WebSocket Server
+
+**Done:**
+- `ui/ws_server.py` — aiohttp WebSocket server: broadcasts all Event Bus events to clients, handles commands (confirm_signal, reject_signal, close_position, set_mode, get_state), sends initial state on connect. Protocol: JSON with type=event|state|command|pong
+- `ui/react-app/` — React + TypeScript app (Vite):
+  - TypeScript types, Zustand store, WebSocket reconnect hook
+  - Dashboard: open positions, signal queue, mode switcher, paper trading stats
+  - ChartView: TradingView Lightweight Charts with live candle updates, symbol/tf selector
+  - EventBusMonitor: live event stream with filter, color-coded by module, pause/clear
+  - TradePanel: position form with risk-based size calculator
+  - Analytics: trade journal table with PnL stats
+  - Sidebar: tab navigation, event counter, connection status
+- `ui/electron/main.js + preload.js` — Electron wrapper (1440×900, dev/prod modes)
+- 12 unit tests for WS server (serialisation, commands, broadcast)
+
+**Decisions:**
+- `_serialise()` recurses into dict/list/objects and converts datetime → isoformat
+- `weakref.WeakSet` for clients — auto-cleanup of disconnected WS connections
+- Electron loads `http://localhost:5173` in dev, `dist/index.html` in production
+- React reconnects every 3s on WS close
+
+**Running the UI:**
+```bash
+cd ui/react-app && npm install && npm run dev   # browser: http://localhost:5173
+# or
+npm run electron:dev                            # Electron desktop
+```
+
+Tests:
+  Unit:        ✅ 203/203
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-G — AI Advisor + ML Dataset
+
+---
+
 ### [2026-04-17] Phase 1-E: Signal Engine + Execution Engine
 
 **Done:**

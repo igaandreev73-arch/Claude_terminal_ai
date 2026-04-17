@@ -38,6 +38,48 @@
 
 ## Записи
 
+### [2026-04-17] Phase 1-F: UI — Electron + React + WebSocket сервер
+
+**Что сделано:**
+- `ui/ws_server.py` — WebSocket сервер (aiohttp): транслирует все события Event Bus клиентам, обрабатывает команды (confirm_signal, reject_signal, close_position, set_mode, get_state), отправляет начальное состояние при подключении. Протокол: JSON с type=event|state|command|pong
+- `ui/react-app/` — React + TypeScript приложение (Vite):
+  - `src/types/index.ts` — все TypeScript типы (Signal, Position, BusEvent, Candle, TradeRecord)
+  - `src/store/useStore.ts` — Zustand store: состояние системы, события, свечи, сделки, навигация
+  - `src/hooks/useWebSocket.ts` — WS хук: подключение, реконнект, роутинг входящих сообщений в стор
+  - `src/components/Dashboard.tsx` — открытые позиции, очередь сигналов, переключение режимов, paper trading статистика
+  - `src/components/ChartView.tsx` — TradingView Lightweight Charts, переключение пар/таймфреймов, live candle updates
+  - `src/components/EventBusMonitor.tsx` — живой поток событий с фильтрацией, цветовой кодировкой, паузой
+  - `src/components/TradePanel.tsx` — форма открытия позиции, калькулятор размера по риску
+  - `src/components/Analytics.tsx` — журнал сделок, win rate, PnL, profit factor
+  - `src/components/Sidebar.tsx` — навигация, счётчик событий, статус подключения
+- `ui/electron/main.js` + `preload.js` — Electron обёртка (1440×900, hiddenTitleBar, dev/prod режимы)
+- 12 unit-тестов для WS сервера (сериализация, команды, broadcast)
+
+**Решения:**
+- `_serialise()` рекурсивно обходит dict/list/объекты и datetime → isoformat строки
+- `_on_event` не рассылает если `not self._clients` — избегаем лишней сериализации
+- `weakref.WeakSet` для клиентов — автоматическая очистка отключившихся WS соединений
+- Electron загружает `http://localhost:5173` в dev режиме и `dist/index.html` в production
+- WS реконнект каждые 3 секунды на стороне React
+
+**Запуск UI:**
+```bash
+cd ui/react-app && npm install && npm run dev   # браузер: http://localhost:5173
+# или
+npm run electron:dev                            # Electron desktop app
+```
+
+Тесты:
+  Unit:        ✅ 203/203
+  Integration: —
+  Smoke:       —
+  Покрытие:    н/д
+
+Коммит: `—`
+Следующий шаг: Phase 1-G — AI Advisor + ML Dataset
+
+---
+
 ### [2026-04-17] Phase 1-E: Signal Engine + Execution Engine
 
 **Что сделано:**
