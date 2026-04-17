@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react'
-import { createChart, IChartApi, ISeriesApi, CandlestickSeries } from 'lightweight-charts'
+import { useEffect, useRef } from 'react'
+import { createChart, IChartApi, ISeriesApi } from 'lightweight-charts'
 import { useStore } from '../store/useStore'
 
 const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT']
@@ -32,7 +32,7 @@ export default function ChartView() {
       height: containerRef.current.clientHeight,
     })
 
-    const series = chart.addSeries(CandlestickSeries, {
+    const series = chart.addCandlestickSeries({
       upColor: '#00ff88',
       downColor: '#ff4444',
       borderVisible: false,

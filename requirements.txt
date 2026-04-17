@@ -6,6 +6,7 @@ loguru>=0.7
 
 # Конфигурация
 pydantic-settings>=2.0
+python-dotenv>=1.0
 
 # База данных
 SQLAlchemy[asyncio]>=2.0

@@ -12,7 +12,7 @@ from data.validator import Candle, Trade, OrderBookSnapshot, OrderBookLevel
 
 log = get_logger("BingXWS")
 
-WS_URL = "wss://open-api.bingx.com/market"
+WS_URL = "wss://open-api-ws.bingx.com/market"
 PING_INTERVAL = 20        # BingX требует heartbeat каждые 20-30 сек
 RECONNECT_BASE_DELAY = 5  # начальная задержка реконнекта
 RECONNECT_MAX_DELAY = 60
@@ -39,7 +39,9 @@ class BingXWebSocket:
 
     async def start(self) -> None:
         self._running = True
-        self._session = aiohttp.ClientSession()
+        # ThreadedResolver uses OS socket.getaddrinfo — respects VPN/system DNS
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+        self._session = aiohttp.ClientSession(connector=connector)
         self._task = asyncio.create_task(self._run_loop())
         log.info(f"BingX WS запущен для символов: {self._symbols}")
 
@@ -93,7 +95,7 @@ class BingXWebSocket:
     async def _subscribe_all(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         for symbol in self._symbols:
             bx = _fmt_symbol(symbol)
-            for stream in [f"{bx}@kline_1m", f"{bx}@depth20@500ms", f"{bx}@trade"]:
+            for stream in [f"{bx}@kline_1min", f"{bx}@depth20", f"{bx}@trade"]:
                 msg = {"id": str(uuid.uuid4()), "reqType": "sub", "dataType": stream}
                 await ws.send_str(json.dumps(msg))
                 log.debug(f"Подписка: {stream}")
@@ -130,7 +132,7 @@ class BingXWebSocket:
 
         data_type: str = data.get("dataType", "")
 
-        if "@kline_1m" in data_type:
+        if "@kline_1m" in data_type or "@kline_1min" in data_type:
             await self._on_kline(data)
         elif "@depth20" in data_type:
             await self._on_depth(data)
@@ -138,22 +140,23 @@ class BingXWebSocket:
             await self._on_trade(data)
 
     async def _on_kline(self, data: dict) -> None:
-        # BingX kline payload: data.data.c (closed), data.data.T (closeTime) etc.
-        kline = data.get("data", {})
+        log.debug(f"kline raw: {data}")
         symbol_raw: str = data.get("dataType", "").split("@")[0]  # "BTC-USDT"
         symbol = symbol_raw.replace("-", "/")
+        # BingX perpetual swap kline: data.data.K.{t,T,o,h,l,c,v,x}
+        kline = data.get("data", {}).get("K", data.get("data", {}))
 
         try:
             candle = Candle(
                 symbol=symbol,
                 timeframe="1m",
-                open_time=int(kline.get("T", 0)) - 60_000,  # open_time = closeTime - 60s
+                open_time=int(kline.get("t", 0)),
                 open=float(kline.get("o", 0)),
                 high=float(kline.get("h", 0)),
                 low=float(kline.get("l", 0)),
                 close=float(kline.get("c", 0)),
                 volume=float(kline.get("v", 0)),
-                is_closed=bool(kline.get("X", False)),
+                is_closed=bool(kline.get("x", False)),
                 source="exchange",
             )
         except Exception as e:

@@ -29,7 +29,9 @@ class BingXRestClient:
         self._session: aiohttp.ClientSession | None = None
 
     async def start(self) -> None:
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
         self._session = aiohttp.ClientSession(
+            connector=connector,
             timeout=aiohttp.ClientTimeout(total=10),
             headers={"Content-Type": "application/json"},
         )

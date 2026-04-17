@@ -1,6 +1,9 @@
 import asyncio
 import signal
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from core.event_bus import Event, EventBus
 from core.health_monitor import HealthMonitor
 from core.logger import get_logger, setup_logger

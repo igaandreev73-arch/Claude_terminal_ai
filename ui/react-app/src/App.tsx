@@ -1,4 +1,3 @@
-import React from 'react'
 import { useStore } from './store/useStore'
 import { useWebSocket } from './hooks/useWebSocket'
 import Sidebar from './components/Sidebar'

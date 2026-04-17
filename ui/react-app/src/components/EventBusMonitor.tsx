@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { useStore } from '../store/useStore'
 
 const EVENT_COLORS: Record<string, string> = {

@@ -1,3 +1,4 @@
+import io
 import os
 import sys
 from loguru import logger
@@ -13,6 +14,13 @@ def setup_logger() -> None:
     logger.remove()
 
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+    # Force UTF-8 on Windows consoles that default to cp1251/cp1252
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
     logger.add(
         sys.stdout,

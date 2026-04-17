@@ -1,6 +1,5 @@
-import React, { useMemo } from 'react'
+import { useMemo } from 'react'
 import { useStore } from '../store/useStore'
-import type { TradeRecord } from '../types'
 
 export default function Analytics() {
   const { trades } = useStore()
