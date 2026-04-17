@@ -38,6 +38,37 @@
 
 ## Записи
 
+### [2026-04-17] Phase 1-D: Backtester & Strategy Builder
+
+**Что сделано:**
+- `strategies/base_strategy.py` — абстрактный класс `AbstractStrategy` + `Signal` dataclass (direction, size_pct, sl_pct, tp_pct, confidence). Контракт для всех стратегий
+- `strategies/simple_ma_strategy.py` — пример стратегии MA Crossover (fast/slow параметры), используется в тестах и оптимизаторе
+- `backtester/engine.py` — `BacktestEngine`: поочерёдный обход свечей, управление позицией, проверка SL/TP по high/low каждого бара, комиссия обе стороны, сложные проценты. `BacktestConfig`, `BacktestTrade`, `BacktestResult`
+- `backtester/metrics.py` — `compute_metrics()`: Total PnL, Win Rate, Profit Factor, Max Drawdown, Sharpe Ratio (аннуализированный), avg duration, best/worst trade, trades/month
+- `backtester/optimizer.py` — `GridSearchOptimizer`: перебор всех комбинаций параметров, walk-forward валидация (train_ratio=0.7), сортировка по target_metric. `StrategyFingerprint`: профиль стратегии (лучшее направление, волатильность, % SL/TP exits)
+- `backtester/demo_mode.py` — `DemoMode`: paper trading на живых событиях, подписан на `candle.{tf}.closed`, симулирует позицию как Engine, публикует `demo.trade.opened/closed/stats.updated`
+- 33 новых unit-теста (13 метрик + 10 engine + 7 optimizer + 5 demo)
+
+**Решения:**
+- `t.get("entry_time") is not None` вместо `t.get("entry_time")` — `entry_time=0` ложное значение, пропускалось в duration расчёте
+- `profit_factor=0.0` (не None) когда gross_profit=0 и gross_loss>0 — математически корректно
+- Engine позволяет повторный вход на той же свече после SL/TP — стратегия сама управляет состоянием через `on_close()`
+
+**Отложено:**
+- Bayesian Optimization — Phase 1-G или по необходимости (Grid Search достаточен для MVP)
+- Интеграция с БД (загрузка исторических свечей) — через `CandlesRepository.get_range()`
+
+Тесты:
+  Unit:        ✅ 153/153
+  Integration: —
+  Smoke:       —
+  Покрытие:    н/д
+
+Коммит: `—`
+Следующий шаг: Phase 1-E — Signal Engine + Execution Engine
+
+---
+
 ### [2026-04-17] Phase 1-C: MTF Confluence + Correlation Engine
 
 **Что сделано:**

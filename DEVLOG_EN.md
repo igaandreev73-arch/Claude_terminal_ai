@@ -38,6 +38,37 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-17] Phase 1-D: Backtester & Strategy Builder
+
+**Done:**
+- `strategies/base_strategy.py` — `AbstractStrategy` ABC + `Signal` dataclass (direction, size_pct, sl_pct, tp_pct, confidence)
+- `strategies/simple_ma_strategy.py` — MA Crossover example strategy used in tests and optimizer
+- `backtester/engine.py` — bar-by-bar simulation, SL/TP checked against high/low each bar, commission both sides, compounding capital. `BacktestConfig`, `BacktestTrade`, `BacktestResult`
+- `backtester/metrics.py` — all PRD-required metrics: Total PnL, Win Rate, Profit Factor, Max Drawdown, Sharpe Ratio (annualised), avg trade duration, best/worst trade, trades/month
+- `backtester/optimizer.py` — `GridSearchOptimizer`: exhaustive param grid, walk-forward validation (train_ratio=0.7), ranked by target_metric. `StrategyFingerprint`: best direction, volatility profile, SL/TP exit breakdown
+- `backtester/demo_mode.py` — paper trading on live candle events; mirrors engine logic; publishes `demo.trade.opened/closed/stats.updated`
+- 33 new unit tests (13 metrics + 10 engine + 7 optimizer + 5 demo)
+
+**Decisions:**
+- `entry_time is not None` check (not truthy) — `entry_time=0` is falsy, was silently skipping duration calculation
+- `profit_factor=0.0` (not None) when gross_profit=0 and gross_loss>0 — mathematically correct
+- Engine allows re-entry on same bar after SL/TP — strategy controls state via `on_close()`
+
+**Postponed:**
+- Bayesian Optimization — Phase 1-G or on demand (Grid Search is sufficient for MVP)
+- DB integration for history loading — via `CandlesRepository.get_range()`
+
+Tests:
+  Unit:        ✅ 153/153
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-E — Signal Engine + Execution Engine
+
+---
+
 ### [2026-04-17] Phase 1-C: MTF Confluence + Correlation Engine
 
 **Done:**
