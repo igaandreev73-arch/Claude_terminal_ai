@@ -38,6 +38,33 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-17] Phase 1-C: MTF Confluence + Correlation Engine
+
+**Done:**
+- `analytics/mtf_confluence.py` — weighted score 0–100 across all timeframes (1m→1M), multipliers for SMC/Volume/OB/Fear&Greed/Spoof confirmation. Explicit `subscribe_ta_for_symbols()` (wildcard not supported by EventBus). Publishes `mtf.score.updated` with `actionable`/`auto_eligible` flags
+- `analytics/correlation.py` — Pearson correlation of pairs vs BTC/ETH (rolling 50-candle window), market regime detection (following/inverse/independent), divergence detector (pair normally follows BTC but last 3 candles diverged). Publishes `correlation.updated`, `correlation.divergence`, `correlation.matrix` (every 20 updates)
+- `tests/unit/test_mtf_confluence.py` — 15 tests covering `_ta_direction`, score with TA/SMC/Volume/OB/Spoof, cap at 100, neutral signal removal, event publishing
+- `tests/unit/test_correlation.py` — 23 tests covering `pearson`, `pct_changes`, `_market_regime`, `_check_divergence`, full `CorrelationEngine` lifecycle
+- `main.py` — wired `MTFConfluenceEngine` and `CorrelationEngine`
+
+**Decisions:**
+- `subscribe_ta_for_symbols(symbols)` must be called explicitly after `start()` — EventBus has no wildcard subscription support
+- Multiplier tests use a weak single-indicator signal (MACD only, base=25) so there's room to verify the multiplier effect before hitting the 100 cap
+
+**Postponed:**
+- Fear/Greed integration in MTF — deferred until `external_feeds.py` is implemented
+
+Tests:
+  Unit:        ✅ 120/120
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-D — Backtester & Strategy Builder
+
+---
+
 ### [2026-04-17] Phase 1-B: Order Book Processor
 
 **Done:**

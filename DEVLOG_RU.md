@@ -38,6 +38,34 @@
 
 ## Записи
 
+### [2026-04-17] Phase 1-C: MTF Confluence + Correlation Engine
+
+**Что сделано:**
+- `analytics/mtf_confluence.py` — MTF Confluence Engine: взвешенный score 0–100 по всем ТФ (1m→1M), множители SMC/Volume/OB/Fear&Greed/Spoof. `subscribe_ta_for_symbols()` для явной подписки (wildcard не поддерживается шиной). Публикует `mtf.score.updated` с полями `actionable`/`auto_eligible`
+- `analytics/correlation.py` — Correlation Engine: Pearson корреляция пар с BTC/ETH (скользящее окно 50 свечей), режим рынка (following/inverse/independent), детектор дивергенции (пара обычно следует за BTC, но за последние 3 свечи разошлись). Публикует `correlation.updated`, `correlation.divergence`, `correlation.matrix` (каждые 20 обновлений)
+- `tests/unit/test_mtf_confluence.py` — 15 тестов: `_ta_direction`, score при TA/SMC/Volume/OB/Spoof, cap 100, удаление нейтрального сигнала, проверка публикации событий
+- `tests/unit/test_correlation.py` — 23 теста: `pearson`, `pct_changes`, `_market_regime`, `_check_divergence`, `CorrelationEngine` (накопление, MIN_WINDOW, публикация, матрица, игнорирование неотслеживаемых символов)
+- `main.py` — подключены `MTFConfluenceEngine` и `CorrelationEngine`
+
+**Решения:**
+- `subscribe_ta_for_symbols(symbols)` вызывается явно после `start()` — EventBus не поддерживает wildcard-паттерны (`ta.*.{tf}.updated`)
+- Тест на "нейтральный сигнал удаляется": для полного нейтралитета нужно не передавать EMA-поля (иначе дефолты дают bull EMA cross)
+- Тест на multiplier: при strength=1.0 на одном ТФ base уже 100 → нельзя проверить рост. Используем слабый сигнал (только MACD > 0) → base=25
+
+**Отложено:**
+- Sentiment Engine (Fear/Greed интеграция в MTF) — при реализации `external_feeds.py`
+
+Тесты:
+  Unit:        ✅ 120/120
+  Integration: —
+  Smoke:       —
+  Покрытие:    н/д
+
+Коммит: `—`
+Следующий шаг: Phase 1-D — Backtester & Strategy Builder
+
+---
+
 ### [2026-04-17] Phase 1-C: Analytics Core
 
 **Что сделано:**
