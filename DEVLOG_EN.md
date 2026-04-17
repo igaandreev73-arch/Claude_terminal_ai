@@ -1,0 +1,192 @@
+# Development Log — EN
+## Crypto Trading Terminal
+
+> **Rule:** New entry after each work session or completed milestone.  
+> Keep it short: what was done, what decisions were made, what was postponed and why.  
+> Russian version is maintained in parallel in `DEVLOG_RU.md`.
+
+---
+
+## Entry format
+
+```
+### [YYYY-MM-DD] Phase name
+
+**Done:**
+- item
+
+**Decisions:**
+- decision and rationale
+
+**Postponed:**
+- what and why
+
+Tests:
+  Unit:        ✅ / ❌ / — / ⏳
+  Integration: ✅ / ❌ / — / ⏳
+  Smoke:       ✅ / ❌ / — / ⏳
+  Coverage:    XX%
+
+Commit: `hash` or `—`
+Next step: ...
+```
+
+**Test status legend:**
+`✅` written and passing · `❌` has failures · `—` not applicable · `⏳` planned
+
+---
+
+## Entries
+
+### [2026-04-17] Phase 1-B: Order Book Processor
+
+**Done:**
+- `data/ob_processor.py` — full Order Book Processor:
+  - `OrderBook` — local book state with apply_snapshot/apply_diff, imbalance, slippage_estimate, liquidity_walls
+  - `SpoofDetector` — tracks large orders (> 5× avg), detects disappearance within 2s → `ob.spoof_detected`
+  - `OBProcessor` — subscribes to `orderbook.update`, publishes `ob.state_updated`, `ob.pressure`, `ob.snapshot`, `ob.spoof_detected`
+  - Periodic snapshots every 10s + pre-trade snapshot via `calc_slippage()`
+- `storage/repositories/orderbook_repo.py` — persists orderbook snapshots
+
+**Decisions:**
+- Liquidity wall detection uses avg across all levels (including the wall itself) — test needed enough contrast between small orders and the wall
+- Spoof detector cleans entries older than TTL*3 to avoid memory leaks
+- Slippage calculated greedily across book levels — honest estimate of real execution cost
+
+**Postponed:**
+- Nothing
+
+Tests:
+  Unit:        ✅ 49/49
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-C — Analytics Core: TA Engine, SmartMoney Engine, Volume Engine
+
+---
+
+### [2026-04-17] Phase 1-A: Data Layer + Storage
+
+**Done:**
+- `data/validator.py` — Pydantic v2 models: Candle, Trade, OrderBookSnapshot with full validation
+- `data/rate_limit_guard.py` — token bucket with priority queue (HIGH/MEDIUM/LOW), 20 req/s limit
+- `data/bingx_rest.py` — public REST client: historical klines, OI, funding rate
+- `data/bingx_ws.py` — WebSocket client: kline_1m, depth20, trade subscriptions; auto-reconnect with backoff; gzip decoding
+- `data/tf_aggregator.py` — 1m → 3m/5m/15m/30m/1h/2h/4h/6h/12h/1d aggregation; subscribes to candle.1m.closed
+- `storage/database.py` — SQLAlchemy async engine, init_db(), singleton session factory
+- `storage/models.py` — 9 ORM models per PRD schema
+- `storage/repositories/candles_repo.py` — upsert/upsert_many, get_latest, get_range, count, delete_before
+
+**Decisions:**
+- Used `model_validator(mode='after')` instead of `field_validator` for high >= low check — in pydantic v2 field_validator fires before all fields are set
+- `:memory:` SQLite in tests with singleton engine reset between tests
+- `on_conflict_do_update` for upsert — SQLite-specific dialect
+
+**Postponed:**
+- `data/external_feeds.py` (Fear/Greed, news) — Phase 1-C
+
+Tests:
+  Unit:        ✅ 34/34
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-A final — `scripts/init_db.py`, `scripts/sync_history.py`, wire up main.py with Data Collector + TF Aggregator + Storage
+
+---
+
+### [2026-04-17] Phase 1-A: Foundation infrastructure
+
+**Done:**
+- Created full project folder structure per PRD §18
+- Created config files: `pyproject.toml`, `requirements.txt`, `.env.example`, `.gitignore`
+- Implemented `core/logger.py` — loguru with console + file output, 10MB rotation, 30-day retention
+- Implemented `core/event_bus.py` — asyncio pub/sub bus with dispatch loop, event logging, exception isolation per handler
+- Implemented `core/base_module.py` — abstract base class for all modules (start/stop/heartbeat/health_check)
+- Implemented `core/health_monitor.py` — heartbeat monitoring with 60s timeout, checks every 30s, publishes HEALTH_UPDATE to Event Bus
+- Implemented `main.py` — entry point with graceful shutdown on Ctrl+C
+
+**Decisions:**
+- Used `datetime.now(timezone.utc)` instead of deprecated `utcnow()` — Python 3.13 raises DeprecationWarning on the old method
+- Event Bus uses `asyncio.wait_for(timeout=1.0)` in dispatch loop to allow clean stop()
+- Health Monitor uses task.cancel() for stop; Event Bus uses `_running` flag — different patterns intentionally based on behavior needs
+
+**Postponed:**
+- Nothing from Phase 1-A was postponed
+
+Tests:
+  Unit:        ✅ 13/13
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Phase 1-A continuation — Data Collector (bingx_rest.py, bingx_ws.py, rate_limit_guard.py), TF Aggregator, SQLite storage
+
+---
+
+### [2026-04-17] Architecture design
+
+**Done:**
+- Completed full product design session
+- Defined concept: personal automated trading platform for BingX Futures/Spot, targeting SaaS in Phase 2
+- Created PRD v1.0 — 20 sections, full system documentation
+- Created all initial repository documents
+
+**Decisions:**
+- Event-driven architecture on asyncio — modules are independent, communicate only through the Event Bus. Allows developing and restarting modules without affecting others
+- Timeframes: only 1m fetched from exchange, all others (up to 1M) aggregated locally — saves BingX rate-limit and enables non-standard TFs (2h, 3h)
+- Order Book connected from day one — needed for manipulation detection (spoofing), slippage calculation, and future scalping
+- ML Dataset written from day one, models to be trained later when sufficient data accumulates
+- BingX API key stored only in Execution Engine — isolated from the rest of the system
+- Data collector can be moved to a separate VPS with a different IP if rate-limit becomes an issue
+- AI Advisor embedded with full system context: logs, events, positions, strategies
+- Event Bus Monitor — dedicated UI tab, live stream of all events with filtering
+- Intermediate indicator data (raw RSI, ema_fast before signal line) stored separately and analyzed as candidates for hybrid strategies
+- Strategy Fingerprint — profile of conditions where a strategy performs well: market regime, volatility, session
+- Snapshot system — full market state snapshot every N minutes for debugging and ML
+- Development logs maintained separately: DEVLOG_RU.md and DEVLOG_EN.md
+- Tests are a mandatory part of completing each module (Unit + Integration + Smoke 60 sec)
+
+**Postponed:**
+- Selection of specific top-5 trading pairs — to be determined at development start based on current volumes
+- ML models — Phase 2, after sufficient dataset is accumulated
+- Web interface — Phase 2, backend is designed so Electron can be replaced without rewriting the core
+
+Tests:
+  Unit:        — (development not started)
+  Integration: —
+  Smoke:       —
+  Coverage:    —
+
+Commit: `—`
+Next step: Project initialization — folder structure, `pyproject.toml`, `.env.example`, base Event Bus, Health Monitor, Logger
+
+---
+
+<!-- TEMPLATE
+
+### [YYYY-MM-DD] 
+
+**Done:**
+- 
+
+**Decisions:**
+- 
+
+**Postponed:**
+- 
+
+Tests:
+  Unit:        
+  Integration: 
+  Smoke:       
+  Coverage:    
+
+Commit: ``
+Next step: 
+
+-->

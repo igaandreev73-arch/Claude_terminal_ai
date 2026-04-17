@@ -1,0 +1,38 @@
+# Секреты
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# База данных
+*.db
+*.sqlite
+
+# Логи
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Claude Code local settings
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Тесты
+.coverage
+htmlcov/
+.pytest_cache/

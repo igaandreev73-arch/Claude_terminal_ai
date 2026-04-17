@@ -1,0 +1,21 @@
+# Асинхронный HTTP и WebSocket
+aiohttp>=3.9
+
+# Логирование
+loguru>=0.7
+
+# Конфигурация
+pydantic-settings>=2.0
+
+# База данных
+SQLAlchemy[asyncio]>=2.0
+aiosqlite>=0.19
+
+# Технический анализ
+pandas>=2.0
+pandas-ta>=0.3
+
+# Тестирование
+pytest>=7.4
+pytest-asyncio>=0.21
+pytest-mock>=3.11
