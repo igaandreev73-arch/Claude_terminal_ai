@@ -1,6 +1,24 @@
 import { create } from 'zustand'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
+export interface DbTableStat {
+  symbol: string
+  timeframe: string
+  count: number
+  from: string | null
+  to: string | null
+  invalid: number
+  ok: number
+}
+
+export interface ObStat {
+  symbol: string
+  count: number
+  from: string | null
+  to: string | null
+  avg_imbalance: number
+}
+
 const MAX_EVENTS = 500
 const MAX_CANDLES = 500
 
@@ -33,6 +51,10 @@ interface Store {
   pushTrade: (t: TradeRecord) => void
   demoStats: Record<string, number>
   setDemoStats: (s: Record<string, number>) => void
+
+  // DB stats
+  dbStats: { candles: DbTableStat[]; orderbook: ObStat[] } | null
+  setDbStats: (s: { candles: DbTableStat[]; orderbook: ObStat[] }) => void
 
   // Active tab
   activeTab: string
@@ -83,6 +105,9 @@ export const useStore = create<Store>((set) => ({
   pushTrade: (t) => set((state) => ({ trades: [t, ...state.trades].slice(0, 200) })),
   demoStats: {},
   setDemoStats: (s) => set({ demoStats: s }),
+
+  dbStats: null,
+  setDbStats: (s) => set({ dbStats: s }),
 
   activeTab: 'dashboard',
   setActiveTab: (t) => set({ activeTab: t }),

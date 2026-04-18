@@ -5,6 +5,7 @@ import { MainDashboard }  from './components/MainDashboard'
 import ChartView          from './components/ChartView'
 import TradePanel         from './components/TradePanel'
 import Analytics          from './components/Analytics'
+import DataView           from './components/DataView'
 import EventBusMonitor    from './components/EventBusMonitor'
 
 export default function App() {
@@ -29,6 +30,9 @@ export default function App() {
           <TradePanel onOpenPosition={openPosition} />
         )}
         {activeTab === 'analytics' && <Analytics />}
+        {activeTab === 'data'      && (
+          <DataView onRequestStats={() => send({ type: 'command', command: 'get_db_stats', payload: {} })} />
+        )}
         {activeTab === 'events'    && <EventBusMonitor />}
       </main>
     </div>

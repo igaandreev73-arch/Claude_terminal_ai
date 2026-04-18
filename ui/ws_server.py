@@ -163,6 +163,86 @@ class WSServer:
         elif command == "get_state":
             await self._send_state(ws)
 
+        elif command == "get_db_stats":
+            await self._send_db_stats(ws)
+
+    async def _send_db_stats(self, ws: WebSocketResponse) -> None:
+        """Собирает статистику по таблицам БД и отправляет клиенту."""
+        from datetime import datetime, timezone
+        from sqlalchemy import func, select, text
+        from storage.database import get_session_factory
+        from storage.models import CandleModel, OrderBookSnapshotModel
+
+        factory = get_session_factory()
+
+        def ts_to_iso(ts: int | None) -> str | None:
+            if ts is None:
+                return None
+            # open_time хранится в миллисекундах
+            try:
+                return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                return None
+
+        candles_stats: list[dict] = []
+        ob_stats: list[dict] = []
+
+        try:
+            async with factory() as session:
+                # Свечи — группировка по symbol + timeframe
+                rows = await session.execute(
+                    select(
+                        CandleModel.symbol,
+                        CandleModel.timeframe,
+                        func.count().label("count"),
+                        func.min(CandleModel.open_time).label("min_ts"),
+                        func.max(CandleModel.open_time).label("max_ts"),
+                        func.sum(
+                            (CandleModel.open <= 0).cast(text("INTEGER"))
+                        ).label("invalid"),
+                    ).group_by(CandleModel.symbol, CandleModel.timeframe)
+                    .order_by(CandleModel.symbol, CandleModel.timeframe)
+                )
+                for r in rows:
+                    candles_stats.append({
+                        "symbol":    r.symbol,
+                        "timeframe": r.timeframe,
+                        "count":     r.count,
+                        "from":      ts_to_iso(r.min_ts),
+                        "to":        ts_to_iso(r.max_ts),
+                        "invalid":   r.invalid or 0,
+                        "ok":        r.count - (r.invalid or 0),
+                    })
+
+                # Стакан — группировка по symbol
+                ob_rows = await session.execute(
+                    select(
+                        OrderBookSnapshotModel.symbol,
+                        func.count().label("count"),
+                        func.min(OrderBookSnapshotModel.timestamp).label("min_ts"),
+                        func.max(OrderBookSnapshotModel.timestamp).label("max_ts"),
+                        func.avg(OrderBookSnapshotModel.imbalance).label("avg_imbalance"),
+                    ).group_by(OrderBookSnapshotModel.symbol)
+                    .order_by(OrderBookSnapshotModel.symbol)
+                )
+                for r in ob_rows:
+                    ob_stats.append({
+                        "symbol":        r.symbol,
+                        "count":         r.count,
+                        "from":          ts_to_iso(r.min_ts),
+                        "to":            ts_to_iso(r.max_ts),
+                        "avg_imbalance": round(r.avg_imbalance or 0, 4),
+                    })
+
+        except Exception as e:
+            log.error(f"Ошибка получения статистики БД: {e}")
+
+        await self._send(ws, {
+            "type":    "db_stats",
+            "candles": candles_stats,
+            "orderbook": ob_stats,
+        })
+
     # ── Event forwarding ──────────────────────────────────────────────────────
 
     async def _on_event(self, event: Event) -> None:

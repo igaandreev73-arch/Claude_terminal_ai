@@ -13,7 +13,7 @@ export function useWebSocket() {
 
   const {
     setConnected, setMode, setPositions, setSignals,
-    pushEvent, pushCandle, pushTrade, setDemoStats,
+    pushEvent, pushCandle, pushTrade, setDemoStats, setDbStats,
   } = useStore()
 
   function connect() {
@@ -62,6 +62,11 @@ export function useWebSocket() {
     }
 
     if (type === 'pong') return
+
+    if (type === 'db_stats') {
+      setDbStats(msg as any)
+      return
+    }
 
     if (type === 'event') {
       const eventType = msg.event_type as string

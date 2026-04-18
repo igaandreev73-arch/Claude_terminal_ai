@@ -7,6 +7,7 @@ const NAV_TABS = [
   { id: 'chart',     label: 'График' },
   { id: 'trade',     label: 'Торговля' },
   { id: 'analytics', label: 'Аналитика' },
+  { id: 'data',      label: 'Данные' },
   { id: 'events',    label: 'Шина событий' },
 ]
 
