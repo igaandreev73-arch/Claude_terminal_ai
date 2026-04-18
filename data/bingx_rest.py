@@ -86,18 +86,18 @@ class BingXRestClient:
         raw = await self._get("/openApi/swap/v3/quote/klines", params, Priority.LOW)
 
         candles: list[Candle] = []
-        # BingX klines format: [openTime, open, high, low, close, volume, closeTime, ...]
+        # BingX v3 klines format: {"time": ms, "open": "...", "high": "...", "low": "...", "close": "...", "volume": "..."}
         for row in raw.get("data", []):
             try:
                 candle = Candle(
                     symbol=symbol,
                     timeframe=timeframe,
-                    open_time=int(row[0]),
-                    open=float(row[1]),
-                    high=float(row[2]),
-                    low=float(row[3]),
-                    close=float(row[4]),
-                    volume=float(row[5]),
+                    open_time=int(row["time"]),
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=float(row["volume"]),
                     is_closed=True,
                     source="exchange",
                 )

@@ -38,6 +38,65 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-19] Data integrity: backfill, TF aggregation, notifications, UX fixes
+
+**Done:**
+
+**Critical BingX API parsing bug fixed (`data/bingx_rest.py`):**
+- BingX v3 `/openApi/swap/v3/quote/klines` returns candles as JSON objects `{"time": ms, "open": "...", ...}`, not arrays `[time, open, ...]`
+- Code used `row[0]`, `row[1]` — every candle raised `KeyError` and was silently skipped
+- Result: only 521 live 1m candles in DB (from WebSocket stream), zero historical data saved
+- Fixed to use `row["time"]`, `row["open"]`, `row["high"]`, `row["low"]`, `row["close"]`, `row["volume"]`
+
+**Backfill strategy: 1m only → aggregate (`data/backfill.py`):**
+- Discovered DB anomaly: more 5m candles than 1m (each TF was fetched independently with different time windows)
+- Decision: only fetch `1m` via REST API, aggregate all other TFs locally
+- `_aggregate_1m(candles_1m, tf, tf_min)`: groups into aligned time windows, skips incomplete candles
+- `_save_with_aggregates(candles_1m, repo)`: saves 1m + 5m + 15m + 1h + 4h + 1d in one call
+- `run_backfill` (auto-start): fetches last 2000 1m candles if DB has fewer
+- `run_manual_backfill`: paginates backwards from `now_ms` for the requested period, aggregates and saves
+
+**DB cleanup and recalculation:**
+- Added `CandlesRepository.delete_timeframe(symbol, tf)` to clear a single TF
+- All 5 pairs (BTC, ETH, SOL, BNB, XRP) had stale aggregated TFs deleted and recalculated from 1m
+- BNB/USDT: 10092 1m → 2017 5m → 671 15m → 167 1h → 41 4h → 6 1d (correct proportions)
+
+**BackfillModal: multi-pair selection (`ui/react-app/src/components/DataView.tsx`):**
+- Toggle buttons to select one or more pairs (blue border = selected)
+- "All pairs / Deselect all" quick-toggle button
+- All 5 pairs selected by default
+- Start button adapts: "Load 5 pairs" / "Start loading"
+- Time estimate scales with number of selected pairs
+
+**Instant backfill notifications (`ui/react-app/src/hooks/useWebSocket.ts`):**
+- New `startBackfill(symbol, period)` function exported from `useWebSocket`
+- On click: immediately creates a notification (`addNotification`) and registers `taskId → notifId` in `notifMapRef`
+- "Active downloads" panel in the modal appears instantly, without waiting for backend response
+- WS `backfill.progress` events update the existing notification via `updateNotification` (no duplicates)
+
+**Auto-load DB stats (`ui/react-app/src/components/DataView.tsx`):**
+- Before: `useEffect(() => { onRequestStats() }, [])` — command sent on mount, but if WS not yet open (page refresh, `activeTab='data'` saved in persist) — command silently dropped
+- Now: `useEffect(() => { if (connected) onRequestStats() }, [connected])` — requests as soon as connection is established, re-requests on reconnect
+
+**Decisions:**
+- Aggregating from 1m guarantees mathematical consistency: 5m candle = exactly 5 one-minute candles, boundaries always aligned, no "artifact" data from the API
+- `startBackfill` in `useWebSocket` (not in `DataView`) — the only place where `notifMapRef` exists; notification creation and tracking in one place without prop-drilling
+- Reacting to `connected` instead of `[]` in useEffect — the only reliable way to wait for an open WS connection before sending a command
+
+**Postponed:**
+- Progress timeline visualization on the Data tab (after completion — refresh DataView without re-requesting)
+
+Tests:
+  Unit:        —
+  Integration: —
+  Smoke:       ✅ backfill for 5 pairs, proportion check in DB
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Load historical data, then AI Advisor / ML Dataset (Phase 1-G)
+
+---
+
 ### [2026-04-18] Phase 1-F: Chart, historical candles, DataView polish
 
 **Done:**

@@ -2,6 +2,17 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
+export interface AppNotification {
+  id: string
+  type: 'progress' | 'success' | 'error' | 'info'
+  title: string
+  message: string
+  progress?: number   // 0–100, только для type='progress'
+  taskId?: string
+  createdAt: number
+  read: boolean
+}
+
 export interface DbTableStat {
   symbol: string
   timeframe: string
@@ -56,6 +67,12 @@ interface Store {
   dbStats: { candles: DbTableStat[]; orderbook: ObStat[] } | null
   setDbStats: (s: { candles: DbTableStat[]; orderbook: ObStat[] }) => void
 
+  notifications: AppNotification[]
+  addNotification: (n: Omit<AppNotification, 'id' | 'createdAt' | 'read'>) => string
+  updateNotification: (id: string, patch: Partial<AppNotification>) => void
+  markAllRead: () => void
+  removeNotification: (id: string) => void
+
   activeTab: string
   setActiveTab: (t: string) => void
 
@@ -108,6 +125,23 @@ export const useStore = create<Store>()(persist((set) => ({
 
   dbStats: null,
   setDbStats: (s) => set({ dbStats: s }),
+
+  notifications: [],
+  addNotification: (n) => {
+    const id = `notif-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    set((s) => ({
+      notifications: [{ ...n, id, createdAt: Date.now(), read: false }, ...s.notifications].slice(0, 50),
+    }))
+    return id
+  },
+  updateNotification: (id, patch) =>
+    set((s) => ({
+      notifications: s.notifications.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+    })),
+  markAllRead: () =>
+    set((s) => ({ notifications: s.notifications.map((n) => ({ ...n, read: true })) })),
+  removeNotification: (id) =>
+    set((s) => ({ notifications: s.notifications.filter((n) => n.id !== id) })),
 
   activeTab: 'dashboard',
   setActiveTab: (t) => set({ activeTab: t }),

@@ -14,7 +14,11 @@ export function useWebSocket() {
   const {
     setConnected, setMode, setPositions, setSignals,
     pushEvent, pushCandle, pushTrade, setDemoStats, setDbStats,
+    addNotification, updateNotification,
   } = useStore()
+
+  // taskId → notificationId (для обновления прогресс-уведомлений)
+  const notifMapRef = useRef<Map<string, string>>(new Map())
 
   function connect() {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -78,6 +82,56 @@ export function useWebSocket() {
       const eventType = msg.event_type as string
       const data = (msg.data ?? {}) as Record<string, unknown>
       const ts = msg.ts as string
+
+      // ── Backfill notifications ────────────────────────────────────────────
+      if (eventType === 'backfill.progress') {
+        const taskId  = data.task_id as string
+        const symbol  = data.symbol  as string
+        const percent = data.percent as number
+        const fetched = data.fetched as number
+        const total   = data.total   as number
+        const tf      = (data.current_tf as string) || ''
+        const existing = notifMapRef.current.get(taskId)
+        if (existing) {
+          updateNotification(existing, {
+            progress: percent,
+            message: `${symbol} · ${tf} · ${fetched}/${total} запросов (${percent}%)`,
+          })
+        } else {
+          const id = addNotification({
+            type: 'progress', title: `Загрузка: ${symbol}`,
+            message: `Запускается загрузка…`, progress: 0, taskId,
+          })
+          notifMapRef.current.set(taskId, id)
+        }
+        return
+      }
+      if (eventType === 'backfill.complete') {
+        const taskId = data.task_id as string
+        const symbol = data.symbol  as string
+        const existing = notifMapRef.current.get(taskId)
+        if (existing) {
+          updateNotification(existing, { type: 'success', progress: 100, message: `Данные загружены для ${symbol}` })
+          notifMapRef.current.delete(taskId)
+        } else {
+          addNotification({ type: 'success', title: `Загрузка завершена`, message: `${symbol}: данные загружены` })
+        }
+        // Автоматически обновляем статистику БД
+        wsRef.current?.send(JSON.stringify({ type: 'command', command: 'get_db_stats', payload: {} }))
+        return
+      }
+      if (eventType === 'backfill.error') {
+        const taskId = data.task_id as string
+        const existing = notifMapRef.current.get(taskId)
+        const err = data.error as string
+        if (existing) {
+          updateNotification(existing, { type: 'error', message: `Ошибка: ${err}` })
+          notifMapRef.current.delete(taskId)
+        } else {
+          addNotification({ type: 'error', title: `Ошибка загрузки`, message: err })
+        }
+        return
+      }
 
       const busEvent: BusEvent = {
         id: String(++eventCounter),
@@ -143,6 +197,20 @@ export function useWebSocket() {
     }
   }
 
+  function startBackfill(symbol: string, period: string) {
+    const taskId = `${symbol}-${period}-${Date.now()}`
+    // Создаём уведомление немедленно, не ждём WS-события
+    const id = addNotification({
+      type: 'progress',
+      title: `Загрузка: ${symbol}`,
+      message: 'Запрос отправлен, ожидаем старта…',
+      progress: 0,
+      taskId,
+    })
+    notifMapRef.current.set(taskId, id)
+    send({ type: 'command', command: 'start_backfill', payload: { symbol, period, task_id: taskId } })
+  }
+
   useEffect(() => {
     connect()
     return () => {
@@ -151,5 +219,5 @@ export function useWebSocket() {
     }
   }, [])
 
-  return { send }
+  return { send, startBackfill }
 }

@@ -36,6 +36,8 @@ from core.logger import get_logger
 if TYPE_CHECKING:
     from execution.execution_engine import ExecutionEngine
     from signals.signal_engine import SignalEngine
+    from data.bingx_rest import BingXRestClient
+    from storage.repositories.candles_repo import CandlesRepository
 
 log = get_logger("WSServer")
 
@@ -53,6 +55,7 @@ BROADCAST_EVENTS = {
     "execution.signal_received", "execution.position_opened", "execution.position_closed",
     "execution.pending", "execution.confirmed", "execution.rejected", "execution.blocked",
     "demo.trade.opened", "demo.trade.closed", "demo.stats.updated",
+    "backfill.progress", "backfill.complete", "backfill.error",
     "HEALTH_UPDATE",
 }
 
@@ -63,17 +66,22 @@ class WSServer:
         event_bus: EventBus,
         signal_engine: "SignalEngine",
         execution_engine: "ExecutionEngine",
+        rest_client: "BingXRestClient | None" = None,
+        candles_repo: "CandlesRepository | None" = None,
         host: str = "localhost",
         port: int = 8765,
     ) -> None:
         self._bus = event_bus
         self._signal_engine = signal_engine
         self._execution_engine = execution_engine
+        self._rest_client = rest_client
+        self._candles_repo = candles_repo
         self._host = host
         self._port = port
         self._clients: weakref.WeakSet[WebSocketResponse] = weakref.WeakSet()
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
+        self._active_backfills: set[str] = set()  # task_id → running
 
     async def start(self) -> None:
         # Подписываемся на все события шины
@@ -183,6 +191,9 @@ class WSServer:
         elif command == "get_state":
             await self._send_state(ws)
 
+        elif command == "start_backfill":
+            await self._handle_start_backfill(ws, payload)
+
         elif command == "get_db_stats":
             await self._send_db_stats(ws)
 
@@ -191,6 +202,31 @@ class WSServer:
             tf     = payload.get("tf", "1m")
             limit  = int(payload.get("limit", 500))
             await self._send_candles(ws, symbol, tf, limit)
+
+    async def _handle_start_backfill(self, ws: WebSocketResponse, payload: dict) -> None:
+        from data.backfill import run_manual_backfill
+        symbol  = payload.get("symbol", "BTC/USDT")
+        period  = payload.get("period", "1w")
+        task_id = payload.get("task_id", f"{symbol}-{period}")
+
+        if task_id in self._active_backfills:
+            await self._send(ws, {"type": "backfill_rejected", "task_id": task_id, "reason": "already_running"})
+            return
+        if not self._rest_client or not self._candles_repo:
+            await self._send(ws, {"type": "backfill_rejected", "task_id": task_id, "reason": "not_configured"})
+            return
+
+        self._active_backfills.add(task_id)
+
+        async def _run():
+            try:
+                await run_manual_backfill(symbol, period, self._rest_client, self._candles_repo, self._bus, task_id)
+            finally:
+                self._active_backfills.discard(task_id)
+
+        import asyncio as _asyncio
+        _asyncio.create_task(_run())
+        log.info(f"Запущен ручной бэкфилл: {symbol} {period} [{task_id}]")
 
     async def _send_candles(self, ws: WebSocketResponse, symbol: str, tf: str, limit: int) -> None:
         from storage.repositories.candles_repo import CandlesRepository

@@ -175,3 +175,15 @@ class CandlesRepository:
             result = await session.execute(stmt)
             await session.commit()
             return result.rowcount
+
+    async def delete_timeframe(self, symbol: str, timeframe: str) -> int:
+        """Удаляет все свечи указанного таймфрейма для символа."""
+        factory = get_session_factory()
+        async with factory() as session:
+            stmt = delete(CandleModel).where(
+                CandleModel.symbol == symbol,
+                CandleModel.timeframe == timeframe,
+            )
+            result = await session.execute(stmt)
+            await session.commit()
+            return result.rowcount

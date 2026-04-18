@@ -92,6 +92,8 @@ async def main() -> None:
     )
     ws_server = WSServer(
         event_bus, signal_engine, execution_engine,
+        rest_client=rest_client,
+        candles_repo=candles_repo,
         host=os.getenv("WS_HOST", "localhost"),
         port=int(os.getenv("WS_PORT", "8765")),
     )

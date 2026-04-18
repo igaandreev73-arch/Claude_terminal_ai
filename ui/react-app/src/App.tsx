@@ -7,10 +7,11 @@ import TradePanel         from './components/TradePanel'
 import Analytics          from './components/Analytics'
 import DataView           from './components/DataView'
 import EventBusMonitor    from './components/EventBusMonitor'
+import StrategiesView     from './components/StrategiesView'
 
 export default function App() {
   const { activeTab } = useStore()
-  const { send } = useWebSocket()
+  const { send, startBackfill } = useWebSocket()
 
   function openPosition(params: {
     symbol: string; direction: 'bull' | 'bear'
@@ -29,9 +30,13 @@ export default function App() {
         {activeTab === 'trade'     && (
           <TradePanel onOpenPosition={openPosition} />
         )}
-        {activeTab === 'analytics' && <Analytics />}
-        {activeTab === 'data'      && (
-          <DataView onRequestStats={() => send({ type: 'command', command: 'get_db_stats', payload: {} })} />
+        {activeTab === 'analytics'   && <Analytics />}
+        {activeTab === 'strategies'  && <StrategiesView />}
+        {activeTab === 'data'        && (
+          <DataView
+            onRequestStats={() => send({ type: 'command', command: 'get_db_stats', payload: {} })}
+            startBackfill={startBackfill}
+          />
         )}
         {activeTab === 'events'    && <EventBusMonitor />}
       </main>

@@ -1,8 +1,227 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, CheckCircle, AlertTriangle, Database, ChevronRight, Info, X, Wifi, Calculator, ShieldCheck } from 'lucide-react'
+import { RefreshCw, CheckCircle, AlertTriangle, Database, ChevronRight, Info, X, Wifi, Calculator, ShieldCheck, MoreHorizontal, Download, Loader } from 'lucide-react'
 import { useStore } from '../store/useStore'
 import type { DbTableStat, ObStat } from '../store/useStore'
+
+const SYMBOLS  = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT']
+const PERIODS  = [
+  { id: '1w',  label: '1 неделя'  },
+  { id: '1mo', label: '1 месяц'   },
+  { id: '1y',  label: '1 год'     },
+  { id: 'all', label: 'За всё время' },
+]
+
+// ── Backfill modal ────────────────────────────────────────────────────────────
+
+interface BackfillModalProps {
+  onClose:        () => void
+  startBackfill:  (symbol: string, period: string) => void
+}
+
+function BackfillModal({ onClose, startBackfill }: BackfillModalProps) {
+  const [selected, setSelected] = useState<string[]>(SYMBOLS)
+  const [period,   setPeriod]   = useState('1w')
+  const [loading,  setLoading]  = useState(false)
+  const notifications = useStore(s => s.notifications)
+
+  const activeTasks = notifications.filter(n => n.type === 'progress' && n.taskId)
+  const allSelected = selected.length === SYMBOLS.length
+
+  const toggleSymbol = (s: string) =>
+    setSelected(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])
+
+  const toggleAll = () => setSelected(allSelected ? [] : [...SYMBOLS])
+
+  const handleStart = () => {
+    if (selected.length === 0) return
+    setLoading(true)
+    selected.forEach(sym => startBackfill(sym, period))
+    setTimeout(() => setLoading(false), 500)
+  }
+
+  const warningText =
+    period === 'all' ? `⚠ Займёт ~${selected.length * 15} мин. Загрузка продолжится в фоне.` :
+    period === '1y'  ? `~${selected.length * 4} мин · загрузка продолжится в фоне` :
+    period === '1mo' ? `~${selected.length} мин · загрузка продолжится в фоне` : null
+
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed', inset: 0, zIndex: 400,
+        background: 'rgba(0,0,0,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backdropFilter: 'blur(4px)',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: 'var(--bg-surface)',
+          border: '1px solid var(--border-default)',
+          borderRadius: 'var(--radius-xl)',
+          padding: '28px 32px',
+          maxWidth: 500,
+          width: '90%',
+          boxShadow: '0 12px 48px rgba(0,0,0,0.6)',
+          display: 'flex', flexDirection: 'column', gap: 20,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              width: 36, height: 36, borderRadius: 'var(--radius-md)',
+              background: 'rgba(59,130,246,0.12)', color: 'var(--accent-blue)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Download size={18} />
+            </span>
+            <div>
+              <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15, color: 'var(--text-primary)' }}>
+                Загрузка исторических данных
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                BingX REST API · только 1m, остальные TF агрегируются
+              </div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 4 }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+
+        {/* Symbols */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>
+              ТОРГОВЫЕ ПАРЫ
+            </div>
+            <button
+              onClick={toggleAll}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: 11, color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)',
+                padding: '2px 6px',
+              }}
+            >
+              {allSelected ? 'Снять все' : 'Все пары'}
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {SYMBOLS.map(s => {
+              const active = selected.includes(s)
+              return (
+                <button
+                  key={s}
+                  onClick={() => toggleSymbol(s)}
+                  style={{
+                    padding: '6px 12px', borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer', fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600,
+                    border: active ? '1px solid var(--accent-blue)' : '1px solid var(--border-subtle)',
+                    background: active ? 'rgba(59,130,246,0.15)' : 'var(--bg-elevated)',
+                    color: active ? 'var(--accent-blue)' : 'var(--text-secondary)',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  {s.replace('/USDT', '')}
+                </button>
+              )
+            })}
+          </div>
+          {selected.length === 0 && (
+            <div style={{ fontSize: 11, color: 'var(--accent-red)', marginTop: 6 }}>Выберите хотя бы одну пару</div>
+          )}
+          {selected.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>
+              Выбрано: {selected.length} из {SYMBOLS.length} пар
+            </div>
+          )}
+        </div>
+
+        {/* Period */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+            ПЕРИОД
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {PERIODS.map(p => (
+              <button
+                key={p.id}
+                onClick={() => setPeriod(p.id)}
+                style={{
+                  padding: '10px 14px', border: `1px solid ${period === p.id ? 'var(--accent-blue)' : 'var(--border-subtle)'}`,
+                  borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: 13,
+                  background: period === p.id ? 'rgba(59,130,246,0.08)' : 'var(--bg-elevated)',
+                  color: period === p.id ? 'var(--accent-blue)' : 'var(--text-secondary)',
+                  textAlign: 'left', transition: 'all 0.15s', fontFamily: 'var(--font-body)',
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {warningText && (
+            <div style={{ fontSize: 11, color: period === 'all' ? 'var(--accent-orange)' : 'var(--text-muted)', marginTop: 8 }}>
+              {warningText}
+            </div>
+          )}
+        </div>
+
+        {/* Active tasks */}
+        {activeTasks.length > 0 && (
+          <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              АКТИВНЫЕ ЗАГРУЗКИ · {activeTasks.length}
+            </div>
+            {activeTasks.map(n => (
+              <div key={n.id}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>{n.title}</span>
+                  <span style={{ color: 'var(--accent-blue)', fontFamily: 'var(--font-mono)' }}>{n.progress ?? 0}%</span>
+                </div>
+                <div style={{ height: 3, background: 'var(--bg-surface)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${n.progress ?? 0}%`, background: 'var(--accent-blue)', borderRadius: 2, transition: 'width 0.4s' }} />
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{n.message}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Start button */}
+        <button
+          onClick={handleStart}
+          disabled={loading || selected.length === 0}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            background: selected.length === 0 ? 'var(--bg-elevated)' : 'var(--accent-blue)',
+            color: selected.length === 0 ? 'var(--text-muted)' : '#fff',
+            border: 'none', borderRadius: 'var(--radius-md)',
+            padding: '12px', fontSize: 13, fontWeight: 600,
+            cursor: (loading || selected.length === 0) ? 'not-allowed' : 'pointer',
+            opacity: loading ? 0.7 : 1,
+            transition: 'all 0.15s',
+          }}
+        >
+          {loading
+            ? <><Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> Запускается…</>
+            : <><Download size={14} /> {selected.length > 1 ? `Загрузить ${selected.length} пары` : 'Начать загрузку'}</>
+          }
+        </button>
+
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0, textAlign: 'center', lineHeight: 1.5 }}>
+          Загрузка продолжается даже после закрытия окна.<br />
+          Прогресс отображается в уведомлениях (колокольчик).
+        </p>
+      </div>
+    </div>,
+    document.body
+  )
+}
 
 const TF_ORDER = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1W','1M']
 
@@ -157,9 +376,22 @@ interface SectionHeaderProps {
   count: number
   statusItems: StatusItem[]
   onInfo: () => void
+  onBackfill?: () => void
 }
 
-function SectionHeader({ title, count, statusItems, onInfo }: SectionHeaderProps) {
+function SectionHeader({ title, count, statusItems, onInfo, onBackfill }: SectionHeaderProps) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const h = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('click', h)
+    return () => document.removeEventListener('click', h)
+  }, [menuOpen])
+
   return (
     <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12, marginTop:8 }}>
       <StatusIndicator items={statusItems} />
@@ -173,13 +405,75 @@ function SectionHeader({ title, count, statusItems, onInfo }: SectionHeaderProps
         fontSize:11,
         color:'var(--text-secondary)',
       }}>{count.toLocaleString()} записей</span>
-      <button
-        onClick={onInfo}
-        style={{ background:'none', border:'none', cursor:'pointer', padding:2, color:'var(--text-muted)', display:'flex', marginLeft:2 }}
-        title="Информация"
-      >
-        <Info size={14} />
-      </button>
+
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+        {/* Info button — ярче */}
+        <button
+          onClick={onInfo}
+          style={{
+            background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
+            borderRadius: 'var(--radius-sm)', cursor: 'pointer', padding: '3px 6px',
+            color: 'var(--accent-blue)', display: 'flex', alignItems: 'center',
+            transition: 'background 0.15s',
+          }}
+          title="Информация"
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.2)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(59,130,246,0.1)')}
+        >
+          <Info size={13} />
+        </button>
+
+        {/* Action menu */}
+        {onBackfill && (
+          <div ref={menuRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => setMenuOpen(v => !v)}
+              style={{
+                background: menuOpen ? 'var(--bg-elevated)' : 'none',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+                padding: '3px 6px', color: 'var(--text-secondary)', display: 'flex',
+                transition: 'all 0.15s',
+              }}
+              title="Действия"
+              onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+              onMouseLeave={e => { if (!menuOpen) e.currentTarget.style.background = 'none' }}
+            >
+              <MoreHorizontal size={13} />
+            </button>
+            {menuOpen && createPortal(
+              (() => {
+                const r = menuRef.current?.getBoundingClientRect()
+                if (!r) return null
+                return (
+                  <div style={{
+                    position: 'fixed', top: r.bottom + 4, right: window.innerWidth - r.right,
+                    background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
+                    borderRadius: 'var(--radius-md)', boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                    zIndex: 300, minWidth: 200, overflow: 'hidden',
+                  }}>
+                    <button
+                      onClick={() => { setMenuOpen(false); onBackfill() }}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                        padding: '10px 14px', background: 'none', border: 'none',
+                        cursor: 'pointer', fontSize: 12, color: 'var(--text-secondary)',
+                        textAlign: 'left', transition: 'background 0.1s',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-elevated)')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                    >
+                      <Download size={13} color="var(--accent-blue)" />
+                      Загрузка исторических данных
+                    </button>
+                  </div>
+                )
+              })(),
+              document.body
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -349,13 +643,17 @@ function OrderBookTable({ rows }: { rows: ObStat[] }) {
 
 interface Props {
   onRequestStats: () => void
+  startBackfill: (symbol: string, period: string) => void
 }
 
-export default function DataView({ onRequestStats }: Props) {
+export default function DataView({ onRequestStats, startBackfill }: Props) {
   const { dbStats, connected } = useStore()
-  const [modal, setModal] = useState<'candles' | 'orderbook' | null>(null)
+  const [modal,    setModal]    = useState<'candles' | 'orderbook' | null>(null)
+  const [backfill, setBackfill] = useState<'candles' | null>(null)
 
-  useEffect(() => { onRequestStats() }, [])
+  useEffect(() => {
+    if (connected) onRequestStats()
+  }, [connected])
 
   const totalCandles  = dbStats?.candles.reduce((s, r) => s + r.count, 0) ?? 0
   const totalOb       = dbStats?.orderbook.reduce((s, r) => s + r.count, 0) ?? 0
@@ -376,7 +674,7 @@ export default function DataView({ onRequestStats }: Props) {
   return (
     <div style={{ height:'100%', overflow:'auto', display:'flex', flexDirection:'column', gap:24 }}>
       {/* Page header */}
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+      <div style={{ width:'100%',display:'flex', justifyContent:'space-between', alignItems:'center' }}>
         <div>
           <h2 style={{ fontSize:18, fontWeight:700, color:'var(--text-primary)', fontFamily:'var(--font-display)' }}>
             База данных
@@ -400,27 +698,28 @@ export default function DataView({ onRequestStats }: Props) {
       </div>
 
       {!dbStats ? (
-        <div style={{ display:'flex', gap:16 }}>
-          <div style={{ display:'flex', flexDirection:'column', gap:8, flex:'0 0 480px' }}>
+        <div style={{ width:'100%',display:'flex', gap:16 }}>
+          <div style={{ display:'flex', flexDirection:'column', gap:8, flex:1 }}>
             {[1,2,3].map(i => <div key={i} className="skeleton" style={{ height:44, borderRadius:'var(--radius-md)' }} />)}
           </div>
-          <div className="skeleton" style={{ height:200, flex:'0 0 600px', borderRadius:'var(--radius-lg)' }} />
+          <div className="skeleton" style={{ height:200, flex:1, borderRadius:'var(--radius-lg)' }} />
         </div>
       ) : (
-        <div style={{ display:'flex', gap:20, alignItems:'flex-start' }}>
+        <div style={{ width:'100%',display:'flex', gap:20, alignItems:'flex-start' }}>
           {/* Candles */}
-          <div style={{ flex:'0 0 480px' }}>
+          <div style={{ flex:1, minWidth:0 }}>
             <SectionHeader
               title="Свечи (Candles)"
               count={totalCandles}
               statusItems={candleStatus}
               onInfo={() => setModal('candles')}
+              onBackfill={() => setBackfill('candles')}
             />
             <CandlesTable rows={dbStats.candles} />
           </div>
 
           {/* Order Book */}
-          <div style={{ flex:'0 0 600px' }}>
+          <div style={{ flex:1, minWidth:0 }}>
             <SectionHeader
               title="Стакан (Order Book)"
               count={totalOb}
@@ -477,6 +776,13 @@ export default function DataView({ onRequestStats }: Props) {
             text="Снимки: каждые ~2 сек на пару (зависит от активности рынка). Исторический backfill стакана не выполняется — данные накапливаются только в реальном времени."
           />
         </InfoModal>
+      )}
+
+      {backfill === 'candles' && (
+        <BackfillModal
+          onClose={() => setBackfill(null)}
+          startBackfill={startBackfill}
+        />
       )}
     </div>
   )
