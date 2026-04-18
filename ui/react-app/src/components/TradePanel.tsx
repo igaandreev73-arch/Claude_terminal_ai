@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 
 const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT']
 
@@ -36,7 +36,7 @@ export default function TradePanel({ onOpenPosition }: Props) {
 
   return (
     <div className="trade-panel">
-      <h2>Trade Panel</h2>
+      <h2>Торговая панель</h2>
       <form className="trade-form" onSubmit={handleSubmit}>
         {/* Symbol */}
         <div className="form-row">
@@ -103,7 +103,7 @@ export default function TradePanel({ onOpenPosition }: Props) {
             <strong>${sizeUsd.toFixed(2)}</strong>
           </div>
           <div className="calc-row">
-            <span>Risk/Reward</span>
+            <span>Риск/Доход</span>
             <strong style={{ color: rr >= 1.5 ? '#00ff88' : '#ffa500' }}>
               1 : {rr.toFixed(2)}
             </strong>

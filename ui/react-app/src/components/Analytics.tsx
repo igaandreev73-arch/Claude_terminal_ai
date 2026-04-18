@@ -23,20 +23,21 @@ export default function Analytics() {
 
   return (
     <div className="analytics">
-      <h2>Аналитика &amp; Журнал сделок</h2>
+      <h2>Аналитика &amp; журнал сделок</h2>
 
       {stats && (
         <div className="analytics-stats">
           <StatCard label="Всего сделок" value={stats.total} />
-          <StatCard label="Win Rate" value={`${stats.winRate.toFixed(1)}%`}
+
+          <StatCard label="Процент побед" value={`${stats.winRate.toFixed(1)}%`}
             color={stats.winRate >= 50 ? '#00ff88' : '#ff4444'} />
-          <StatCard label="Total PnL" value={`$${stats.totalPnl.toFixed(2)}`}
+          <StatCard label="Общий PnL" value={`$${stats.totalPnl.toFixed(2)}`}
             color={stats.totalPnl >= 0 ? '#00ff88' : '#ff4444'} />
-          <StatCard label="Profit Factor"
+          <StatCard label="Профит-фактор"
             value={stats.profitFactor != null ? stats.profitFactor.toFixed(2) : '∞'}
             color={stats.profitFactor == null || stats.profitFactor >= 1.5 ? '#00ff88' : '#ffa500'} />
-          <StatCard label="Avg Win" value={`$${stats.avgWin.toFixed(2)}`} color="#00ff88" />
-          <StatCard label="Avg Loss" value={`$${stats.avgLoss.toFixed(2)}`} color="#ff4444" />
+          <StatCard label="Средний выигрыш" value={`$${stats.avgWin.toFixed(2)}`} color="#00ff88" />
+          <StatCard label="Средний убыток" value={`$${stats.avgLoss.toFixed(2)}`} color="#ff4444" />
         </div>
       )}
 
@@ -48,17 +49,17 @@ export default function Analytics() {
               <th>#</th>
               <th>Пара</th>
               <th>Направление</th>
-              <th>Вход</th>
-              <th>Выход</th>
-              <th>Размер</th>
+              <th>Цена входа</th>
+              <th>Цена выхода</th>
+              <th>Объём</th>
               <th>PnL</th>
               <th>PnL %</th>
-              <th>Закрыта</th>
+              <th>Закрыта по</th>
             </tr>
           </thead>
           <tbody>
             {trades.length === 0 ? (
-              <tr><td colSpan={9} className="empty">Нет сделок</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 24, color: 'var(--text-muted)' }}>Нет сделок</td></tr>
             ) : (
               trades.map((t, i) => (
                 <tr key={t.trade_id + i}>
@@ -66,7 +67,7 @@ export default function Analytics() {
                   <td>{t.symbol ?? '—'}</td>
                   <td>
                     <span className={`direction ${t.direction}`}>
-                      {t.direction === 'bull' ? '▲ L' : '▼ S'}
+                      {t.direction === 'bull' ? '▲ Лонг' : '▼ Шорт'}
                     </span>
                   </td>
                   <td>{t.entry_price.toFixed(4)}</td>

@@ -1,60 +1,35 @@
-import { useStore } from './store/useStore'
-import { useWebSocket } from './hooks/useWebSocket'
-import Sidebar from './components/Sidebar'
-import Dashboard from './components/Dashboard'
-import ChartView from './components/ChartView'
-import TradePanel from './components/TradePanel'
-import Analytics from './components/Analytics'
-import EventBusMonitor from './components/EventBusMonitor'
-import type { ExecutionMode } from './types'
+import { useStore }       from './store/useStore'
+import { useWebSocket }   from './hooks/useWebSocket'
+import { TopBar }         from './components/layout/TopBar'
+import { MainDashboard }  from './components/MainDashboard'
+import ChartView          from './components/ChartView'
+import TradePanel         from './components/TradePanel'
+import Analytics          from './components/Analytics'
+import EventBusMonitor    from './components/EventBusMonitor'
 
 export default function App() {
   const { activeTab } = useStore()
   const { send } = useWebSocket()
 
-  function confirmSignal(signalId: string) {
-    send({ type: 'command', command: 'confirm_signal', payload: { signal_id: signalId } })
-  }
-
-  function rejectSignal(signalId: string) {
-    send({ type: 'command', command: 'reject_signal', payload: { signal_id: signalId } })
-  }
-
-  function closePosition(symbol: string) {
-    send({ type: 'command', command: 'close_position', payload: { symbol } })
-  }
-
-  function changeMode(mode: ExecutionMode) {
-    send({ type: 'command', command: 'set_mode', payload: { mode } })
-  }
-
   function openPosition(params: {
-    symbol: string
-    direction: 'bull' | 'bear'
-    size_usd: number
-    leverage: number
-    sl_pct: number
-    tp_pct: number
+    symbol: string; direction: 'bull' | 'bear'
+    size_usd: number; leverage: number; sl_pct: number; tp_pct: number
   }) {
     send({ type: 'command', command: 'open_position', payload: params })
   }
 
   return (
-    <div className="app">
-      <Sidebar />
-      <main className="main-content">
-        {activeTab === 'dashboard' && (
-          <Dashboard
-            onConfirm={confirmSignal}
-            onReject={rejectSignal}
-            onClose={closePosition}
-            onModeChange={changeMode}
-          />
+    <div style={{ display: 'grid', gridTemplateRows: '56px 1fr', height: '100vh', background: 'var(--bg-app)' }}>
+      <TopBar />
+
+      <main style={{ padding: '20px 24px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        {activeTab === 'dashboard' && <MainDashboard />}
+        {activeTab === 'chart'     && <ChartView />}
+        {activeTab === 'trade'     && (
+          <TradePanel onOpenPosition={openPosition} />
         )}
-        {activeTab === 'chart' && <ChartView />}
-        {activeTab === 'trade' && <TradePanel onOpenPosition={openPosition} />}
         {activeTab === 'analytics' && <Analytics />}
-        {activeTab === 'events' && <EventBusMonitor />}
+        {activeTab === 'events'    && <EventBusMonitor />}
       </main>
     </div>
   )

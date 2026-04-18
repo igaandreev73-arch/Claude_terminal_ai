@@ -102,7 +102,7 @@ export default function Dashboard({ onConfirm, onReject, onClose, onModeChange }
                   </div>
                   <div className="signal-meta">
                     <span>{sig.source}</span>
-                    <span>{sig.auto_eligible ? '⚡ Auto' : '👤 Manual'}</span>
+                    <span>{sig.auto_eligible ? '⚡ Авто' : '👤 Ручной'}</span>
                   </div>
                   {mode === 'semi_auto' && (
                     <div className="signal-actions">
@@ -122,17 +122,17 @@ export default function Dashboard({ onConfirm, onReject, onClose, onModeChange }
 
         {/* Demo Stats */}
         <section className="card">
-          <h2>Paper Trading</h2>
+          <h2>Бумажная торговля</h2>
           <div className="stats-grid">
             <StatBox label="Сделок" value={demoStats.total_trades ?? 0} />
-            <StatBox label="Win Rate" value={`${(demoStats.win_rate_pct ?? 0).toFixed(1)}%`} />
+            <StatBox label="Процент побед" value={`${(demoStats.win_rate_pct ?? 0).toFixed(1)}%`} />
             <StatBox
-              label="Total PnL"
+              label="Общий PnL"
               value={`${(demoStats.total_pnl ?? 0).toFixed(2)}`}
               color={(demoStats.total_pnl ?? 0) >= 0 ? '#00ff88' : '#ff4444'}
             />
-            <StatBox label="Max DD" value={`${(demoStats.max_drawdown_pct ?? 0).toFixed(1)}%`} color="#ffa500" />
-            <StatBox label="Sharpe" value={(demoStats.sharpe_ratio ?? 0).toFixed(2)} />
+            <StatBox label="Макс. просадка" value={`${(demoStats.max_drawdown_pct ?? 0).toFixed(1)}%`} color="#ffa500" />
+            <StatBox label="Шарп" value={(demoStats.sharpe_ratio ?? 0).toFixed(2)} />
             <StatBox label="Капитал" value={`$${(demoStats.capital ?? 0).toFixed(2)}`} />
           </div>
         </section>
