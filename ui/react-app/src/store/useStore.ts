@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
 export interface DbTableStat {
@@ -23,11 +24,9 @@ const MAX_EVENTS = 500
 const MAX_CANDLES = 500
 
 interface Store {
-  // Connection
   connected: boolean
   setConnected: (v: boolean) => void
 
-  // System state
   mode: ExecutionMode
   setMode: (m: ExecutionMode) => void
   positions: Position[]
@@ -35,39 +34,38 @@ interface Store {
   signals: Signal[]
   setSignals: (s: Signal[]) => void
 
-  // Event Bus Monitor
   busEvents: BusEvent[]
   pushEvent: (e: BusEvent) => void
   clearEvents: () => void
   eventFilter: string
   setEventFilter: (f: string) => void
 
-  // Charts — candles per symbol+tf
+  // Realtime candles (from WS events)
   candles: Record<string, Candle[]>
   pushCandle: (key: string, c: Candle) => void
 
-  // Demo / paper trades
+  // Historical candles loaded from DB on demand
+  historicalCandles: Record<string, Candle[]>
+  setHistoricalCandles: (key: string, candles: Candle[]) => void
+
   trades: TradeRecord[]
   pushTrade: (t: TradeRecord) => void
   demoStats: Record<string, number>
   setDemoStats: (s: Record<string, number>) => void
 
-  // DB stats
   dbStats: { candles: DbTableStat[]; orderbook: ObStat[] } | null
   setDbStats: (s: { candles: DbTableStat[]; orderbook: ObStat[] }) => void
 
-  // Active tab
   activeTab: string
   setActiveTab: (t: string) => void
 
-  // Selected chart symbol / tf
   chartSymbol: string
   chartTf: string
   setChartSymbol: (s: string) => void
   setChartTf: (tf: string) => void
 }
 
-export const useStore = create<Store>((set) => ({
+export const useStore = create<Store>()(persist((set) => ({
   connected: false,
   setConnected: (v) => set({ connected: v }),
 
@@ -80,9 +78,7 @@ export const useStore = create<Store>((set) => ({
 
   busEvents: [],
   pushEvent: (e) =>
-    set((state) => ({
-      busEvents: [e, ...state.busEvents].slice(0, MAX_EVENTS),
-    })),
+    set((state) => ({ busEvents: [e, ...state.busEvents].slice(0, MAX_EVENTS) })),
   clearEvents: () => set({ busEvents: [] }),
   eventFilter: '',
   setEventFilter: (f) => set({ eventFilter: f }),
@@ -101,6 +97,10 @@ export const useStore = create<Store>((set) => ({
       return { candles: { ...state.candles, [key]: next } }
     }),
 
+  historicalCandles: {},
+  setHistoricalCandles: (key, candles) =>
+    set((state) => ({ historicalCandles: { ...state.historicalCandles, [key]: candles } })),
+
   trades: [],
   pushTrade: (t) => set((state) => ({ trades: [t, ...state.trades].slice(0, 200) })),
   demoStats: {},
@@ -116,4 +116,11 @@ export const useStore = create<Store>((set) => ({
   chartTf: '1m',
   setChartSymbol: (s) => set({ chartSymbol: s }),
   setChartTf: (tf) => set({ chartTf: tf }),
+}), {
+  name: 'terminal-ui',
+  partialize: (state) => ({
+    activeTab: state.activeTab,
+    chartSymbol: state.chartSymbol,
+    chartTf: state.chartTf,
+  }),
 }))

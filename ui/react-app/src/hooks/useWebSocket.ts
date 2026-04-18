@@ -68,6 +68,12 @@ export function useWebSocket() {
       return
     }
 
+    if (type === 'candles_data') {
+      const key = `${msg.symbol as string}:${msg.tf as string}`
+      useStore.getState().setHistoricalCandles(key, msg.candles as Candle[])
+      return
+    }
+
     if (type === 'event') {
       const eventType = msg.event_type as string
       const data = (msg.data ?? {}) as Record<string, unknown>

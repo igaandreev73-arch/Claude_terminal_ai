@@ -38,6 +38,57 @@
 
 ## Записи
 
+### [2026-04-18] Phase 1-F: График, исторические свечи, DataView polish
+
+**Что сделано:**
+
+**Детектор закрытых свечей (`data/bingx_ws.py`):**
+- BingX Futures WS не отправляет поле `x` (is_closed) в kline-событиях
+- Добавлен `_prev_candles: dict[str, Candle]` — стейт-машина: свеча считается закрытой когда `open_time` следующего тика изменился
+- Публикует `candle.1m.closed` (предыдущая свеча) и `candle.1m.tick` (текущая живая свеча)
+
+**Исторический бэкфилл (`data/backfill.py`):**
+- Новый модуль `run_backfill(symbols, rest_client, repo)`: при старте сравнивает кол-во свечей в БД с целевым (`TARGET_CANDLES`: 1m=1440, 5m=1440, 1h=720 и т.д.)
+- Если данных не хватает — докачивает через REST BingX (лимит 1440 свечей за запрос)
+- Запускается как фоновая задача `asyncio.create_task()` в `main.py`
+
+**REST-эндпоинт для свечей (`ui/ws_server.py`):**
+- Добавлен `GET /api/candles?symbol=&tf=&limit=` — прямой HTTP доступ к `CandlesRepository`
+- CORS-заголовок `Access-Control-Allow-Origin: *` — фронтенд может запрашивать данные без WS
+- Исправлена ошибка `'TextClause' object has no attribute '_isnull'` в `_send_db_stats`: заменён невалидный `.cast(text("INTEGER"))` на `case((CandleModel.open <= 0, 1), else_=0)`
+
+**График (`ui/react-app/src/components/ChartView.tsx`):**
+- Полный редизайн: TradingView Lightweight Charts v4, свечи + гистограмма объёма
+- Исторические данные загружаются через `fetch('/api/candles?...')` напрямую (REST, не WS) — устраняет ненадёжность цепочки WS-команда→ответ
+- Стор обновляется напрямую: `useStore.getState().setHistoricalCandles(key, json.candles)`
+- RT-обновления (`candle.1m.tick`) приходят через WS и объединяются с историей через `mergeCandles()`
+- Тулбар: переключатель пар (5 монет), таймфрейм (6 кнопок), текущая цена + % изменения от первой свечи, счётчики БД/RT
+
+**DataView (`ui/react-app/src/components/DataView.tsx`):**
+- Таблица свечей: группировка по символу, сворачиваемые группы (по умолчанию свёрнуты), в шапке — пара, ТФ, кол-во свечей, статус валидации
+- Тултип `StatusIndicator` переведён на `ReactDOM.createPortal(…, document.body)` — гарантированно появляется поверх любых flex/overflow контейнеров, которые раньше обрезали тултип
+- `persist` middleware в Zustand: запоминает `activeTab`, `chartSymbol`, `chartTf` между перезагрузками страницы
+- Анимированные индикаторы состояния: CSS-классы `status-dot-ok` / `status-dot-err` с keyframe-пульсацией
+
+**Решения:**
+- REST вместо WS для исторических свечей: WS не гарантирует доставку ответа на `get_candles`-команду (нет correlation ID, нет retry), REST семантически корректен для одноразового запроса данных
+- `createPortal` для тултипа: `position: fixed` внутри flex-контейнера с `overflow: hidden` не выходит за его пределы — портал в `document.body` решает это раз и навсегда
+- Бэкфилл как `asyncio.create_task` (не `await`): не блокирует запуск остальных модулей, данные докачиваются параллельно с началом работы WS-потока
+
+**Отложено:**
+- Бэкфилл для ТФ выше 1m (5m, 1h и т.д.) — REST `/klines` с нужным интервалом есть, но TF Aggregator уже делает это из 1m-свечей; приоритет низкий
+
+Тесты:
+  Unit:        —
+  Integration: —
+  Smoke:       —
+  Покрытие:    н/д
+
+Коммит: `—`
+Следующий шаг: AI Advisor или ML Dataset (Phase 1-G)
+
+---
+
 ### [2026-04-17] Phase 1-F: UI — Electron + React + WebSocket сервер
 
 **Что сделано:**

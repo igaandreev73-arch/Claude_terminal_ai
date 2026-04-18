@@ -236,6 +236,18 @@ body {
   70%  { box-shadow: 0 0 0 6px rgba(34,211,165,0); }
   100% { box-shadow: 0 0 0 0 rgba(34,211,165,0); }
 }
+@keyframes statusPulseGreen {
+  0%   { box-shadow: 0 0 0 0 rgba(34,211,165,0.7); opacity: 1; }
+  50%  { box-shadow: 0 0 0 5px rgba(34,211,165,0);  opacity: 0.8; }
+  100% { box-shadow: 0 0 0 0 rgba(34,211,165,0);    opacity: 1; }
+}
+@keyframes statusPulseOrange {
+  0%   { box-shadow: 0 0 0 0 rgba(251,146,60,0.7); opacity: 1; }
+  50%  { box-shadow: 0 0 0 5px rgba(251,146,60,0);  opacity: 0.6; }
+  100% { box-shadow: 0 0 0 0 rgba(251,146,60,0);    opacity: 1; }
+}
+.status-dot-ok  { animation: statusPulseGreen  2.4s ease infinite; }
+.status-dot-err { animation: statusPulseOrange 1.6s ease infinite; }
 @keyframes shimmer {
   0%   { background-position: -200% center; }
   100% { background-position: 200% center; }

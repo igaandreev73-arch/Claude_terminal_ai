@@ -38,6 +38,57 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-18] Phase 1-F: Chart, historical candles, DataView polish
+
+**Done:**
+
+**Closed-candle detector (`data/bingx_ws.py`):**
+- BingX Futures WS does not send the `x` (is_closed) field in kline events
+- Added `_prev_candles: dict[str, Candle]` state machine: a candle is considered closed when the `open_time` of the next tick changes
+- Publishes `candle.1m.closed` (the completed candle) and `candle.1m.tick` (the current live candle)
+
+**Historical backfill (`data/backfill.py`):**
+- New module `run_backfill(symbols, rest_client, repo)`: on startup compares candle count in DB vs target (`TARGET_CANDLES`: 1m=1440, 5m=1440, 1h=720, etc.)
+- If data is insufficient — fetches via BingX REST (up to 1440 candles per request)
+- Launched as a background task via `asyncio.create_task()` in `main.py`
+
+**REST endpoint for candles (`ui/ws_server.py`):**
+- Added `GET /api/candles?symbol=&tf=&limit=` — direct HTTP access to `CandlesRepository`
+- `Access-Control-Allow-Origin: *` CORS header — frontend can fetch without WS
+- Fixed `'TextClause' object has no attribute '_isnull'` bug in `_send_db_stats`: replaced invalid `.cast(text("INTEGER"))` with `case((CandleModel.open <= 0, 1), else_=0)`
+
+**Chart (`ui/react-app/src/components/ChartView.tsx`):**
+- Full rewrite: TradingView Lightweight Charts v4, candlesticks + volume histogram
+- Historical data fetched via `fetch('/api/candles?...')` directly (REST, not WS) — eliminates unreliable WS command→response chain
+- Store updated directly: `useStore.getState().setHistoricalCandles(key, json.candles)`
+- RT updates (`candle.1m.tick`) come via WS and are merged with history via `mergeCandles()`
+- Toolbar: pair switcher (5 coins), timeframe buttons (6), current price + % change from first candle, DB/RT counters
+
+**DataView (`ui/react-app/src/components/DataView.tsx`):**
+- Candles table: grouped by symbol, collapsible groups (collapsed by default), header shows pair, TF, count, validation status
+- `StatusIndicator` tooltip moved to `ReactDOM.createPortal(…, document.body)` — guaranteed to appear above any flex/overflow containers that were clipping it before
+- Zustand `persist` middleware: saves `activeTab`, `chartSymbol`, `chartTf` across page refreshes
+- Animated status dots: CSS classes `status-dot-ok` / `status-dot-err` with keyframe pulse animation
+
+**Decisions:**
+- REST instead of WS for historical candles: WS has no correlation ID or retry mechanism for responses — REST is semantically correct for a one-shot data request
+- `createPortal` for tooltip: `position: fixed` inside a flex container with `overflow: hidden` does not escape it — portal into `document.body` solves this definitively
+- Backfill as `asyncio.create_task` (not `await`): does not block module startup, data is fetched in parallel with the WS stream
+
+**Postponed:**
+- Backfill for TFs above 1m — low priority since TF Aggregator already builds them from 1m candles
+
+Tests:
+  Unit:        —
+  Integration: —
+  Smoke:       —
+  Coverage:    n/a
+
+Commit: `—`
+Next step: AI Advisor or ML Dataset (Phase 1-G)
+
+---
+
 ### [2026-04-17] Phase 1-F: UI — Electron + React + WebSocket Server
 
 **Done:**

@@ -28,6 +28,7 @@ from storage.database import close_db, init_db
 from ui.ws_server import WSServer
 from storage.repositories.candles_repo import CandlesRepository
 from storage.repositories.orderbook_repo import OrderBookRepository
+from data.backfill import run_backfill
 
 log = get_logger("Main")
 
@@ -98,8 +99,8 @@ async def main() -> None:
     # Снимки стакана → БД
     event_bus.subscribe("ob.snapshot", lambda e: ob_repo.save_from_event(e.data))
 
-    # --- Подписка: каждая закрытая свеча (1m и агрегированные) → БД ---
-    all_candle_events = ["candle.1m.closed"] + [f"candle.{tf}.closed" for tf in
+    # --- Подписка: тики и закрытые свечи → БД (upsert, is_closed=True перезапишет тик) ---
+    all_candle_events = ["candle.1m.tick", "candle.1m.closed"] + [f"candle.{tf}.closed" for tf in
                          ["3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]]
     for event_type in all_candle_events:
         event_bus.subscribe(event_type, lambda e, r=candles_repo: _on_candle_closed(e, r))
@@ -121,6 +122,9 @@ async def main() -> None:
     await execution_engine.start()
     await ws_server.start()
     await ws_client.start()
+
+    # Загрузка исторических свечей в фоне (не блокирует старт)
+    asyncio.create_task(run_backfill(symbols, rest_client, candles_repo))
 
     log.info("Система запущена. Нажмите Ctrl+C для остановки.")
 

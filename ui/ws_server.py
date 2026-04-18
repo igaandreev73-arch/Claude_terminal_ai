@@ -82,6 +82,7 @@ class WSServer:
 
         self._app.router.add_get("/ws", self._ws_handler)
         self._app.router.add_get("/health", self._health_handler)
+        self._app.router.add_get("/api/candles", self._candles_http_handler)
 
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -100,6 +101,25 @@ class WSServer:
 
     async def _health_handler(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "clients": len(list(self._clients))})
+
+    async def _candles_http_handler(self, request: web.Request) -> web.Response:
+        symbol = request.rel_url.query.get("symbol", "BTC/USDT")
+        tf     = request.rel_url.query.get("tf", "1m")
+        limit  = int(request.rel_url.query.get("limit", "500"))
+        from storage.repositories.candles_repo import CandlesRepository
+        repo = CandlesRepository()
+        try:
+            candles = await repo.get_latest(symbol, tf, limit)
+            data = [
+                {"time": c.open_time // 1000, "open": c.open,
+                 "high": c.high, "low": c.low, "close": c.close, "volume": c.volume}
+                for c in candles
+            ]
+        except Exception as e:
+            log.error(f"REST /api/candles ошибка: {e}")
+            data = []
+        headers = {"Access-Control-Allow-Origin": "*"}
+        return web.json_response({"candles": data, "symbol": symbol, "tf": tf}, headers=headers)
 
     async def _ws_handler(self, request: web.Request) -> WebSocketResponse:
         ws = WebSocketResponse(heartbeat=30)
@@ -166,10 +186,34 @@ class WSServer:
         elif command == "get_db_stats":
             await self._send_db_stats(ws)
 
+        elif command == "get_candles":
+            symbol = payload.get("symbol", "BTC/USDT")
+            tf     = payload.get("tf", "1m")
+            limit  = int(payload.get("limit", 500))
+            await self._send_candles(ws, symbol, tf, limit)
+
+    async def _send_candles(self, ws: WebSocketResponse, symbol: str, tf: str, limit: int) -> None:
+        from storage.repositories.candles_repo import CandlesRepository
+        repo = CandlesRepository()
+        try:
+            candles = await repo.get_latest(symbol, tf, limit)
+            await self._send(ws, {
+                "type":    "candles_data",
+                "symbol":  symbol,
+                "tf":      tf,
+                "candles": [
+                    {"time": c.open_time // 1000, "open": c.open,
+                     "high": c.high, "low": c.low, "close": c.close, "volume": c.volume}
+                    for c in candles
+                ],
+            })
+        except Exception as e:
+            log.error(f"Ошибка получения свечей {symbol} {tf}: {e}")
+
     async def _send_db_stats(self, ws: WebSocketResponse) -> None:
         """Собирает статистику по таблицам БД и отправляет клиенту."""
         from datetime import datetime, timezone
-        from sqlalchemy import func, select, text
+        from sqlalchemy import Integer, case, func, select
         from storage.database import get_session_factory
         from storage.models import CandleModel, OrderBookSnapshotModel
 
@@ -198,7 +242,7 @@ class WSServer:
                         func.min(CandleModel.open_time).label("min_ts"),
                         func.max(CandleModel.open_time).label("max_ts"),
                         func.sum(
-                            (CandleModel.open <= 0).cast(text("INTEGER"))
+                            case((CandleModel.open <= 0, 1), else_=0)
                         ).label("invalid"),
                     ).group_by(CandleModel.symbol, CandleModel.timeframe)
                     .order_by(CandleModel.symbol, CandleModel.timeframe)

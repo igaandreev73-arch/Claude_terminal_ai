@@ -36,6 +36,8 @@ class BingXWebSocket:
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._session: aiohttp.ClientSession | None = None
         self._task: asyncio.Task | None = None
+        # Track last candle per symbol to detect close via open_time change
+        self._prev_candles: dict[str, Candle] = {}
 
     async def start(self) -> None:
         self._running = True
@@ -140,23 +142,22 @@ class BingXWebSocket:
             await self._on_trade(data)
 
     async def _on_kline(self, data: dict) -> None:
-        log.debug(f"kline raw: {data}")
         symbol_raw: str = data.get("dataType", "").split("@")[0]  # "BTC-USDT"
         symbol = symbol_raw.replace("-", "/")
-        # BingX perpetual swap kline: data.data.K.{t,T,o,h,l,c,v,x}
         kline = data.get("data", {}).get("K", data.get("data", {}))
+        open_time = int(kline.get("t", 0))
 
         try:
             candle = Candle(
                 symbol=symbol,
                 timeframe="1m",
-                open_time=int(kline.get("t", 0)),
+                open_time=open_time,
                 open=float(kline.get("o", 0)),
                 high=float(kline.get("h", 0)),
                 low=float(kline.get("l", 0)),
                 close=float(kline.get("c", 0)),
                 volume=float(kline.get("v", 0)),
-                is_closed=bool(kline.get("x", False)),
+                is_closed=False,
                 source="exchange",
             )
         except Exception as e:
@@ -164,8 +165,19 @@ class BingXWebSocket:
             await self._bus.publish("data.validation_error", {"symbol": symbol, "error": str(e)})
             return
 
-        event_type = "candle.1m.closed" if candle.is_closed else "candle.1m.tick"
-        await self._bus.publish(event_type, candle)
+        prev = self._prev_candles.get(symbol)
+        if prev is not None and prev.open_time != open_time:
+            # New candle started — the previous one is now fully closed
+            closed = Candle(
+                symbol=prev.symbol, timeframe=prev.timeframe,
+                open_time=prev.open_time,
+                open=prev.open, high=prev.high, low=prev.low, close=prev.close,
+                volume=prev.volume, is_closed=True, source=prev.source,
+            )
+            await self._bus.publish("candle.1m.closed", closed)
+
+        self._prev_candles[symbol] = candle
+        await self._bus.publish("candle.1m.tick", candle)
 
     async def _on_depth(self, data: dict) -> None:
         symbol_raw: str = data.get("dataType", "").split("@")[0]
