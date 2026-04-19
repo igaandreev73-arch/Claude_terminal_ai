@@ -28,7 +28,7 @@ from storage.database import close_db, init_db
 from ui.ws_server import WSServer
 from storage.repositories.candles_repo import CandlesRepository
 from storage.repositories.orderbook_repo import OrderBookRepository
-from data.backfill import run_backfill
+from data.backfill import run_backfill, repair_integrity
 
 log = get_logger("Main")
 
@@ -125,8 +125,12 @@ async def main() -> None:
     await ws_server.start()
     await ws_client.start()
 
-    # Загрузка исторических свечей в фоне (не блокирует старт)
-    asyncio.create_task(run_backfill(symbols, rest_client, candles_repo))
+    # Проверка и авторемонт целостности БД, затем бэкфилл (в фоне)
+    async def _startup_data():
+        await repair_integrity(symbols, candles_repo)
+        await run_backfill(symbols, rest_client, candles_repo)
+
+    asyncio.create_task(_startup_data())
 
     log.info("Система запущена. Нажмите Ctrl+C для остановки.")
 

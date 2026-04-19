@@ -33,14 +33,21 @@ PERIOD_MINUTES: dict[str, int] = {
     "all": 3  * 365 * 24 * 60,
 }
 
-# Таймфреймы для агрегации (минут в каждом)
+# Таймфреймы для агрегации (минут в каждом) — все TF которые мы храним
 AGG_TFS: dict[str, int] = {
+    "3m":  3,
     "5m":  5,
     "15m": 15,
+    "30m": 30,
     "1h":  60,
+    "2h":  120,
     "4h":  240,
     "1d":  1440,
 }
+
+# Ожидаемое соотношение между соседними TF (для проверки целостности)
+# Каждый следующий TF должен содержать МЕНЬШЕ свечей чем предыдущий
+_TF_ORDER: list[str] = ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "1d"]
 
 MAX_PER_REQUEST = 1440   # BingX max limit
 REQUEST_SLEEP   = 0.45   # ~20 req/s max
@@ -86,7 +93,60 @@ async def _save_with_aggregates(candles_1m: list[Candle], repo: CandlesRepositor
         agg = _aggregate_1m(candles_1m, tf, tf_min)
         if agg:
             await repo.upsert_many(agg)
-            log.debug(f"Агрегировано {len(agg)} свечей {tf}")
+
+
+# ── Проверка и авторемонт целостности БД ──────────────────────────────────────
+
+async def repair_integrity(symbols: list[str], repo: CandlesRepository) -> None:
+    """
+    Проверяет что все агрегированные TF соответствуют покрытию 1m-данных.
+    Нарушение = фактическое кол-во свечей отличается от ожидаемого более чем на 10%.
+    При нарушении — удаляет все агрегированные TF и пересчитывает из 1m.
+    Запускается автоматически при каждом старте системы.
+    """
+    log.info("Проверка целостности свечных данных...")
+    repaired = 0
+
+    for symbol in symbols:
+        count_1m = await repo.count(symbol, "1m")
+        if count_1m == 0:
+            continue
+
+        violations = []
+        for tf, tf_min in AGG_TFS.items():
+            actual = await repo.count(symbol, tf)
+            expected = count_1m // tf_min
+            if expected == 0:
+                continue
+            # Отклонение > 10% от ожидаемого — нарушение (слишком мало или слишком много)
+            deviation = abs(actual - expected) / expected
+            if deviation > 0.10:
+                violations.append(
+                    f"{tf}: факт={actual:,} ожид≈{expected:,} ({deviation:.0%})"
+                )
+
+        if not violations:
+            log.info(f"{symbol}: OK ({count_1m:,} 1m)")
+            continue
+
+        log.warning(f"{symbol}: нарушения пропорций — {'; '.join(violations)}")
+        log.info(f"{symbol}: пересчёт всех TF из {count_1m:,} 1m-свечей...")
+
+        for tf in AGG_TFS:
+            await repo.delete_timeframe(symbol, tf)
+
+        candles_1m = await repo.get_latest(symbol=symbol, timeframe="1m", limit=10_000_000)
+        for tf, tf_min in AGG_TFS.items():
+            agg = _aggregate_1m(candles_1m, tf, tf_min)
+            if agg:
+                await repo.upsert_many(agg)
+                log.info(f"  {symbol} {tf}: {len(agg):,}")
+        repaired += 1
+
+    if repaired:
+        log.info(f"Авторемонт завершён: исправлено {repaired} символов")
+    else:
+        log.info("Целостность данных в норме")
 
 
 # ── Авто-бэкфилл при старте ──────────────────────────────────────────────────

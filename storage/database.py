@@ -21,7 +21,14 @@ def get_engine():
         db_path = os.getenv("DB_PATH", "data/terminal.db")
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
         url = f"sqlite+aiosqlite:///{db_path}"
-        _engine = create_async_engine(url, echo=False)
+        _engine = create_async_engine(
+            url,
+            echo=False,
+            connect_args={
+                "timeout": 30,           # ждём до 30с при блокировке
+                "check_same_thread": False,
+            },
+        )
         log.info(f"БД подключена: {db_path}")
     return _engine
 
@@ -34,11 +41,16 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Создаёт все таблицы если не существуют."""
+    """Создаёт все таблицы если не существуют. Включает WAL-режим."""
     from storage import models  # noqa: F401 — нужен чтобы зарегистрировать модели в Base.metadata
+    from sqlalchemy import text
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # WAL позволяет параллельные читатели при одном писателе
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=30000"))
+        await conn.execute(text("PRAGMA synchronous=NORMAL"))
     log.info("Таблицы БД созданы/проверены")
 
 
