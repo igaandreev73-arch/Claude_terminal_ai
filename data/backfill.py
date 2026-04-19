@@ -149,6 +149,46 @@ async def repair_integrity(symbols: list[str], repo: CandlesRepository) -> None:
         log.info("Целостность данных в норме")
 
 
+# ── Обновление свежих свечей из REST (исправляет WS-артефакты) ───────────────
+
+REFRESH_MINUTES = 120   # последние N минут перезаписываем из REST при каждом старте
+
+
+async def refresh_recent(
+    symbols: list[str],
+    rest_client: BingXRestClient,
+    repo: CandlesRepository,
+) -> None:
+    """
+    Перезаписывает последние REFRESH_MINUTES минут 1m-свечей из REST API
+    и пересчитывает агрегаты для этого диапазона.
+
+    Зачем: live WS-свечи снимаются в момент детектирования закрытия (по смене
+    open_time следующего тика) — биржа ещё может дообрабатывать последние сделки,
+    поэтому volume и цена WS-свечей немного отличаются от финальных REST-значений.
+    """
+    log.info(f"Обновление последних {REFRESH_MINUTES} мин свечей из REST...")
+    for symbol in symbols:
+        try:
+            candles = await rest_client.fetch_klines(
+                symbol, "1m", limit=REFRESH_MINUTES
+            )
+            if not candles:
+                continue
+            await repo.upsert_many(candles)
+
+            # Пересчитываем агрегаты только для обновлённого диапазона
+            for tf, tf_min in AGG_TFS.items():
+                agg = _aggregate_1m(candles, tf, tf_min)
+                if agg:
+                    await repo.upsert_many(agg)
+
+            log.info(f"{symbol}: обновлено {len(candles)} 1m-свечей + агрегаты")
+            await asyncio.sleep(0.3)
+        except Exception as e:
+            log.error(f"Ошибка обновления {symbol}: {e}")
+
+
 # ── Авто-бэкфилл при старте ──────────────────────────────────────────────────
 
 async def run_backfill(
