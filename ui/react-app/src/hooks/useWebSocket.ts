@@ -57,6 +57,22 @@ export function useWebSocket() {
       setPositions((msg.positions ?? []) as Position[])
       setSignals((msg.signals ?? []) as Signal[])
       setMode((msg.mode ?? 'alert_only') as string as ReturnType<typeof useStore.getState>['mode'])
+      // Восстанавливаем уведомления для задач, которые ещё идут на бэкенде
+      const backfills = (msg.active_backfills ?? []) as Array<{
+        task_id: string; symbol: string; period: string; percent: number
+      }>
+      for (const bf of backfills) {
+        if (!notifMapRef.current.has(bf.task_id)) {
+          const id = addNotification({
+            type: 'progress',
+            title: `Загрузка: ${bf.symbol}`,
+            message: `Восстановлено после переподключения`,
+            progress: bf.percent,
+            taskId: bf.task_id,
+          })
+          notifMapRef.current.set(bf.task_id, id)
+        }
+      }
       return
     }
 

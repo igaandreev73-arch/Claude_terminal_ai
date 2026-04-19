@@ -263,7 +263,14 @@ async def run_manual_backfill(
     end_ms   = now_ms
     page_dur = MAX_PER_REQUEST * 60 * 1000  # 1m × MAX_PER_REQUEST
     done     = 0
-    all_1m: list[Candle] = []
+    total_saved = 0
+    buffer: list[Candle] = []
+    CHECKPOINT = 10  # сохраняем в БД каждые N страниц
+
+    async def _flush(buf: list[Candle]) -> None:
+        """Сохраняет накопленный буфер 1m-свечей в БД."""
+        if buf:
+            await repo.upsert_many(buf)
 
     try:
         while end_ms > start_ms:
@@ -276,13 +283,22 @@ async def run_manual_backfill(
                     end_time=end_ms,
                 )
                 if chunk:
-                    all_1m.extend(chunk)
+                    buffer.extend(chunk)
             except Exception as e:
                 log.warning(f"[{task_id}] Ошибка запроса {symbol} 1m: {e}")
 
             end_ms = req_start
             done += 1
-            percent = min(99, int(done / total_pages * 100))
+
+            # Чекпоинт: сохраняем накопленный буфер каждые CHECKPOINT страниц
+            if done % CHECKPOINT == 0 and buffer:
+                await _flush(buffer)
+                total_saved += len(buffer)
+                buffer.clear()
+                log.info(f"[{task_id}] Чекпоинт: сохранено {total_saved:,} 1m-свечей")
+
+            # 95% = загрузка, последние 5% = агрегация
+            percent = min(95, int(done / total_pages * 100))
 
             await bus.publish("backfill.progress", {
                 "task_id": task_id,
@@ -297,14 +313,36 @@ async def run_manual_backfill(
 
             await asyncio.sleep(REQUEST_SLEEP)
 
-        # Сохраняем все 1m-свечи и агрегируем
-        log.info(f"[{task_id}] Получено {len(all_1m)} 1m-свечей, агрегируем и сохраняем...")
-        await _save_with_aggregates(all_1m, repo)
+        # Сохраняем остаток буфера
+        await _flush(buffer)
+        total_saved += len(buffer)
+        buffer.clear()
+
+        # Агрегируем все TF из сохранённых 1m-свечей в БД
+        log.info(f"[{task_id}] Получено {total_saved:,} 1m-свечей, агрегируем все TF...")
+        await bus.publish("backfill.progress", {
+            "task_id": task_id, "symbol": symbol, "period": period,
+            "fetched": done, "total": total_pages, "percent": 97,
+            "current_tf": "aggregating", "status": "running",
+        })
+
+        all_1m = await repo.get_latest(symbol=symbol, timeframe="1m", limit=10_000_000)
+        for tf, tf_min in AGG_TFS.items():
+            agg = _aggregate_1m(all_1m, tf, tf_min)
+            if agg:
+                await repo.upsert_many(agg)
 
     except asyncio.CancelledError:
-        log.warning(f"[{task_id}] Бэкфилл отменён")
+        # При отмене — сохраняем то что успели накопить
+        if buffer:
+            await _flush(buffer)
+            log.warning(f"[{task_id}] Бэкфилл отменён, сохранено {total_saved + len(buffer):,} 1m-свечей")
+        else:
+            log.warning(f"[{task_id}] Бэкфилл отменён")
         raise
     except Exception as e:
+        if buffer:
+            await _flush(buffer)
         log.error(f"[{task_id}] Критическая ошибка бэкфилла: {e}")
         await bus.publish("backfill.error", {
             "task_id": task_id,

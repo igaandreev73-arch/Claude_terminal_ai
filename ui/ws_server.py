@@ -81,7 +81,7 @@ class WSServer:
         self._clients: weakref.WeakSet[WebSocketResponse] = weakref.WeakSet()
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
-        self._active_backfills: set[str] = set()  # task_id → running
+        self._active_backfills: dict[str, dict] = {}  # task_id → {symbol, period, percent, fetched, total}
 
     async def start(self) -> None:
         # Подписываемся на все события шины
@@ -216,13 +216,25 @@ class WSServer:
             await self._send(ws, {"type": "backfill_rejected", "task_id": task_id, "reason": "not_configured"})
             return
 
-        self._active_backfills.add(task_id)
+        self._active_backfills[task_id] = {
+            "task_id": task_id, "symbol": symbol, "period": period,
+            "percent": 0, "fetched": 0, "total": 0, "status": "running",
+        }
+
+        # Обновляем кэш прогресса при каждом backfill.progress событии
+        def _on_progress(event):
+            d = event.data
+            if d.get("task_id") == task_id:
+                info = self._active_backfills.get(task_id)
+                if info:
+                    info.update({k: d[k] for k in ("percent", "fetched", "total", "status") if k in d})
+        self._bus.subscribe("backfill.progress", _on_progress)
 
         async def _run():
             try:
                 await run_manual_backfill(symbol, period, self._rest_client, self._candles_repo, self._bus, task_id)
             finally:
-                self._active_backfills.discard(task_id)
+                self._active_backfills.pop(task_id, None)
 
         import asyncio as _asyncio
         _asyncio.create_task(_run())
@@ -376,6 +388,7 @@ class WSServer:
             "positions": positions,
             "signals": signals,
             "mode": mode,
+            "active_backfills": list(self._active_backfills.values()),
         })
 
 
