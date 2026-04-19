@@ -29,12 +29,10 @@ class EventBus:
 
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
         self._subscribers[event_type].append(handler)
-        log.debug(f"Подписка на событие '{event_type}': {handler.__qualname__}")
 
     async def publish(self, event_type: str, data: Any = None) -> None:
         event = Event(type=event_type, data=data)
         await self._queue.put(event)
-        log.debug(f"Событие опубликовано: '{event_type}'")
 
     async def _dispatch_loop(self) -> None:
         log.info("Event Bus запущен")
@@ -46,7 +44,6 @@ class EventBus:
 
             handlers = self._subscribers.get(event.type, [])
             if not handlers:
-                log.debug(f"Нет подписчиков для события '{event.type}'")
                 continue
 
             for handler in handlers:

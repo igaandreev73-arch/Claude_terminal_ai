@@ -31,11 +31,12 @@ def setup_logger() -> None:
 
     logger.add(
         "logs/app_{time:YYYY-MM-DD}.log",
-        level=log_level,
+        level="INFO",          # файл всегда INFO, консоль — по LOG_LEVEL
         format="{time:YYYY-MM-DD HH:mm:ss} | {level:<8} | {extra[module]} | {message}",
         rotation="10 MB",
-        retention="30 days",
+        retention=7,           # храним последние 7 файлов (~70 МБ максимум)
         encoding="utf-8",
+        compression="gz",      # сжимаем ротированные файлы
     )
 
     _configured = True
