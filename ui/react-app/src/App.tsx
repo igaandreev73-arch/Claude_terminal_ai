@@ -11,7 +11,7 @@ import StrategiesView     from './components/StrategiesView'
 
 export default function App() {
   const { activeTab } = useStore()
-  const { send, startBackfill } = useWebSocket()
+  const { send, startBackfill, stopTask, resumeTask, runValidation } = useWebSocket()
 
   function openPosition(params: {
     symbol: string; direction: 'bull' | 'bear'
@@ -22,7 +22,7 @@ export default function App() {
 
   return (
     <div style={{ display: 'grid', gridTemplateRows: '56px 1fr', height: '100vh', background: 'var(--bg-app)' }}>
-      <TopBar />
+      <TopBar onStopTask={stopTask} onResumeTask={resumeTask} />
 
       <main style={{ padding: '20px 24px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {activeTab === 'dashboard' && <MainDashboard />}
@@ -36,6 +36,7 @@ export default function App() {
           <DataView
             onRequestStats={() => send({ type: 'command', command: 'get_db_stats', payload: {} })}
             startBackfill={startBackfill}
+            runValidation={runValidation}
           />
         )}
         {activeTab === 'events'    && <EventBusMonitor />}

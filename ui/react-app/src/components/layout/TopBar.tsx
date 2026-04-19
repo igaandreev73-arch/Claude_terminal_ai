@@ -4,6 +4,7 @@ import { Bell, Search, CheckCircle, AlertCircle, X, Loader } from 'lucide-react'
 import { LiveDot } from '../ui/LiveDot'
 import { useStore } from '../../store/useStore'
 import type { AppNotification } from '../../store/useStore'
+import { TaskQueueIcon } from '../TaskQueuePanel'
 
 const NAV_TABS = [
   { id: 'dashboard',  label: 'Дашборд'      },
@@ -219,7 +220,12 @@ function NotificationBell() {
 
 // ── TopBar ────────────────────────────────────────────────────────────────────
 
-export function TopBar() {
+interface TopBarProps {
+  onStopTask?: (id: string) => void
+  onResumeTask?: (id: string) => void
+}
+
+export function TopBar({ onStopTask, onResumeTask }: TopBarProps = {}) {
   const { activeTab, setActiveTab, connected } = useStore()
 
   return (
@@ -326,6 +332,12 @@ export function TopBar() {
               {connected ? 'Онлайн' : 'Офлайн'}
             </span>
           </div>
+
+          {/* Task Queue */}
+          <TaskQueueIcon
+            onStop={onStopTask ?? (() => {})}
+            onResume={onResumeTask ?? (() => {})}
+          />
 
           {/* Bell */}
           <NotificationBell />

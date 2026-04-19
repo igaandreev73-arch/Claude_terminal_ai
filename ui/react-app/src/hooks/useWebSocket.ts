@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store/useStore'
+import type { TaskInfo } from '../store/useStore'
 import type { BusEvent, Candle, Position, Signal, TradeRecord } from '../types'
 
 const WS_URL = 'ws://localhost:8765/ws'
@@ -15,6 +16,7 @@ export function useWebSocket() {
     setConnected, setMode, setPositions, setSignals,
     pushEvent, pushCandle, pushTrade, setDemoStats, setDbStats,
     addNotification, updateNotification,
+    upsertTask,
   } = useStore()
 
   // taskId → notificationId (для обновления прогресс-уведомлений)
@@ -59,7 +61,8 @@ export function useWebSocket() {
       setMode((msg.mode ?? 'alert_only') as string as ReturnType<typeof useStore.getState>['mode'])
       // Восстанавливаем уведомления для задач, которые ещё идут на бэкенде
       const backfills = (msg.active_backfills ?? []) as Array<{
-        task_id: string; symbol: string; period: string; percent: number
+        task_id: string; symbol: string; period: string; percent: number;
+        fetched: number; total: number; status: string; speed_cps?: number; eta_seconds?: number
       }>
       for (const bf of backfills) {
         if (!notifMapRef.current.has(bf.task_id)) {
@@ -72,6 +75,23 @@ export function useWebSocket() {
           })
           notifMapRef.current.set(bf.task_id, id)
         }
+        upsertTask({
+          task_id: bf.task_id,
+          type: 'backfill',
+          symbol: bf.symbol,
+          period: bf.period,
+          status: bf.status ?? 'running',
+          percent: bf.percent,
+          fetched: bf.fetched ?? 0,
+          total_pages: bf.total ?? 0,
+          speed_cps: bf.speed_cps,
+          eta_seconds: bf.eta_seconds,
+        })
+      }
+      // Приостановленные задачи
+      const pausedTasks = (msg.paused_tasks ?? []) as TaskInfo[]
+      for (const pt of pausedTasks) {
+        upsertTask(pt)
       }
       return
     }
@@ -101,17 +121,21 @@ export function useWebSocket() {
 
       // ── Backfill notifications ────────────────────────────────────────────
       if (eventType === 'backfill.progress') {
-        const taskId  = data.task_id as string
-        const symbol  = data.symbol  as string
-        const percent = data.percent as number
-        const fetched = data.fetched as number
-        const total   = data.total   as number
-        const tf      = (data.current_tf as string) || ''
-        const existing = notifMapRef.current.get(taskId)
+        const taskId    = data.task_id as string
+        const symbol    = data.symbol  as string
+        const percent   = data.percent as number
+        const fetched   = data.fetched as number
+        const total     = data.total   as number
+        const tf        = (data.current_tf as string) || ''
+        const speedCps  = data.speed_cps as number | undefined
+        const etaSec    = data.eta_seconds as number | undefined
+        const status    = (data.status as string) || 'running'
+        const existing  = notifMapRef.current.get(taskId)
+        const speedStr  = speedCps ? ` · ${speedCps.toFixed(0)} св/с` : ''
         if (existing) {
           updateNotification(existing, {
             progress: percent,
-            message: `${symbol} · ${tf} · ${fetched}/${total} запросов (${percent}%)`,
+            message: `${symbol} · ${tf} · ${fetched}/${total} запросов (${percent}%)${speedStr}`,
           })
         } else {
           const id = addNotification({
@@ -120,6 +144,19 @@ export function useWebSocket() {
           })
           notifMapRef.current.set(taskId, id)
         }
+        upsertTask({
+          task_id: taskId,
+          type: 'backfill',
+          symbol,
+          period: data.period as string | undefined,
+          status,
+          percent,
+          fetched,
+          total_pages: total,
+          total_saved: data.total_saved as number | undefined,
+          speed_cps: speedCps,
+          eta_seconds: etaSec,
+        })
         return
       }
       if (eventType === 'backfill.complete') {
@@ -132,12 +169,24 @@ export function useWebSocket() {
         } else {
           addNotification({ type: 'success', title: `Загрузка завершена`, message: `${symbol}: данные загружены` })
         }
+        upsertTask({
+          task_id: taskId,
+          type: 'backfill',
+          symbol,
+          period: data.period as string | undefined,
+          status: 'completed',
+          percent: 100,
+          fetched: 0,
+          total_pages: 0,
+          total_saved: data.total_saved as number | undefined,
+        })
         // Автоматически обновляем статистику БД
         wsRef.current?.send(JSON.stringify({ type: 'command', command: 'get_db_stats', payload: {} }))
         return
       }
       if (eventType === 'backfill.error') {
         const taskId = data.task_id as string
+        const symbol = (data.symbol ?? '') as string
         const existing = notifMapRef.current.get(taskId)
         const err = data.error as string
         if (existing) {
@@ -146,6 +195,32 @@ export function useWebSocket() {
         } else {
           addNotification({ type: 'error', title: `Ошибка загрузки`, message: err })
         }
+        upsertTask({
+          task_id: taskId,
+          type: 'backfill',
+          symbol,
+          status: 'error',
+          percent: 0,
+          fetched: 0,
+          total_pages: 0,
+          error: err,
+        })
+        return
+      }
+      if (eventType === 'validation.result') {
+        const taskId = data.task_id as string
+        const symbol = data.symbol  as string
+        upsertTask({
+          task_id: taskId,
+          type: 'validation',
+          symbol,
+          status: (data.status as string) === 'error' ? 'error' : 'completed',
+          percent: 100,
+          fetched: 0,
+          total_pages: 0,
+          result: JSON.stringify(data),
+          error: data.error as string | undefined,
+        })
         return
       }
 
@@ -227,6 +302,18 @@ export function useWebSocket() {
     send({ type: 'command', command: 'start_backfill', payload: { symbol, period, task_id: taskId } })
   }
 
+  function stopTask(task_id: string) {
+    send({ type: 'command', command: 'stop_task', payload: { task_id } })
+  }
+
+  function resumeTask(task_id: string) {
+    send({ type: 'command', command: 'resume_task', payload: { task_id } })
+  }
+
+  function runValidation(symbol: string, mode: 'quick' | 'full') {
+    send({ type: 'command', command: 'run_validation', payload: { symbol, mode } })
+  }
+
   useEffect(() => {
     connect()
     return () => {
@@ -235,5 +322,5 @@ export function useWebSocket() {
     }
   }, [])
 
-  return { send, startBackfill }
+  return { send, startBackfill, stopTask, resumeTask, runValidation }
 }

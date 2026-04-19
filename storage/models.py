@@ -152,3 +152,23 @@ class SystemLogModel(Base):
     module: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     details: Mapped[str | None] = mapped_column(Text)
+
+
+class TaskModel(Base):
+    __tablename__ = "tasks"
+
+    task_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    type: Mapped[str] = mapped_column(Text, nullable=False)      # backfill, validation
+    symbol: Mapped[str | None] = mapped_column(Text)
+    period: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, nullable=False)    # running, paused, completed, error, cancelled
+    percent: Mapped[int] = mapped_column(Integer, default=0)
+    fetched: Mapped[int] = mapped_column(Integer, default=0)
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    total_saved: Mapped[int] = mapped_column(Integer, default=0)
+    checkpoint_end_ms: Mapped[int | None] = mapped_column(Integer)  # for resume
+    speed_cps: Mapped[float] = mapped_column(Float, default=0)      # candles/sec
+    result: Mapped[str | None] = mapped_column(Text)   # JSON result on completion
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[int] = mapped_column(Integer)
+    updated_at: Mapped[int] = mapped_column(Integer)

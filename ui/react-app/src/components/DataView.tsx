@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, CheckCircle, AlertTriangle, Database, ChevronRight, Info, X, Wifi, Calculator, ShieldCheck, MoreHorizontal, Download, Loader } from 'lucide-react'
+import { RefreshCw, CheckCircle, AlertTriangle, Database, ChevronRight, Info, X, Wifi, Calculator, ShieldCheck, MoreHorizontal, Download, Loader, FlaskConical } from 'lucide-react'
 import { useStore } from '../store/useStore'
-import type { DbTableStat, ObStat } from '../store/useStore'
+import type { DbTableStat, ObStat, TaskInfo } from '../store/useStore'
 
 const SYMBOLS  = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT']
 const PERIODS  = [
@@ -639,17 +639,263 @@ function OrderBookTable({ rows }: { rows: ObStat[] }) {
   )
 }
 
+// ── Testing Panel ─────────────────────────────────────────────────────────────
+
+interface TestingPanelProps {
+  runValidation: (symbol: string, mode: 'quick' | 'full') => void
+}
+
+function TestingPanel({ runValidation }: TestingPanelProps) {
+  const { tasks } = useStore()
+  const [selectedSymbol, setSelectedSymbol] = useState('BTC/USDT')
+  const [loading, setLoading] = useState<string | null>(null)  // 'quick' | 'full' | null
+
+  // Последние результаты валидации по символу
+  const validationTasks = tasks.filter(
+    t => t.type === 'validation' && (t.status === 'completed' || t.status === 'error')
+  )
+  const resultBySymbol: Record<string, TaskInfo> = {}
+  for (const t of validationTasks) {
+    if (!resultBySymbol[t.symbol] || (t.created_at ?? 0) > (resultBySymbol[t.symbol].created_at ?? 0)) {
+      resultBySymbol[t.symbol] = t
+    }
+  }
+
+  const runningValidation = tasks.find(
+    t => t.type === 'validation' && t.symbol === selectedSymbol && t.status === 'running'
+  )
+
+  const latestResult = resultBySymbol[selectedSymbol]
+
+  function handleRun(mode: 'quick' | 'full') {
+    setLoading(mode)
+    runValidation(selectedSymbol, mode)
+    setTimeout(() => setLoading(null), 2000)
+  }
+
+  function ageStr(task: TaskInfo): string {
+    if (!task.created_at) return ''
+    const sec = Math.round((Date.now() / 1000) - task.created_at)
+    if (sec < 60) return `${sec}с назад`
+    if (sec < 3600) return `${Math.round(sec / 60)}м назад`
+    return `${Math.round(sec / 3600)}ч назад`
+  }
+
+  function parseResult(task: TaskInfo): Record<string, unknown> | null {
+    if (!task.result) return null
+    try { return JSON.parse(task.result) } catch { return null }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Header */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <FlaskConical size={16} color="var(--accent-purple)" />
+          <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-display)' }}>
+            Тестирование данных
+          </span>
+        </div>
+        <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+          Сравнение свечей в БД с актуальными данными BingX API по случайным окнам
+        </p>
+      </div>
+
+      {/* Symbol selector */}
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.08em', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+          ТОРГОВАЯ ПАРА
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {SYMBOLS.map(s => (
+            <button
+              key={s}
+              onClick={() => setSelectedSymbol(s)}
+              style={{
+                padding: '6px 12px', borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer', fontSize: 12, fontFamily: 'var(--font-mono)', fontWeight: 600,
+                border: selectedSymbol === s ? '1px solid var(--accent-purple)' : '1px solid var(--border-subtle)',
+                background: selectedSymbol === s ? 'rgba(139,92,246,0.15)' : 'var(--bg-elevated)',
+                color: selectedSymbol === s ? 'var(--accent-purple)' : 'var(--text-secondary)',
+                transition: 'all 0.15s',
+              }}
+            >
+              {s.replace('/USDT', '')}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Action buttons */}
+      <div style={{ display: 'flex', gap: 10 }}>
+        <button
+          onClick={() => handleRun('quick')}
+          disabled={!!runningValidation || loading === 'quick'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '10px 18px', borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-default)',
+            background: 'var(--bg-elevated)',
+            color: 'var(--text-secondary)',
+            cursor: (runningValidation || loading === 'quick') ? 'not-allowed' : 'pointer',
+            fontSize: 13, fontFamily: 'var(--font-body)',
+            opacity: (runningValidation || loading === 'quick') ? 0.6 : 1,
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => { if (!runningValidation) e.currentTarget.style.background = 'var(--bg-surface)' }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'var(--bg-elevated)' }}
+        >
+          {loading === 'quick'
+            ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Запускается…</>
+            : <><FlaskConical size={13} /> Быстрая проверка (3 окна)</>
+          }
+        </button>
+
+        <button
+          onClick={() => handleRun('full')}
+          disabled={!!runningValidation || loading === 'full'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '10px 18px', borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(139,92,246,0.4)',
+            background: 'rgba(139,92,246,0.08)',
+            color: 'var(--accent-purple)',
+            cursor: (runningValidation || loading === 'full') ? 'not-allowed' : 'pointer',
+            fontSize: 13, fontFamily: 'var(--font-body)',
+            opacity: (runningValidation || loading === 'full') ? 0.6 : 1,
+            transition: 'all 0.15s',
+          }}
+        >
+          {loading === 'full'
+            ? <><Loader size={13} style={{ animation: 'spin 1s linear infinite' }} /> Запускается…</>
+            : <><FlaskConical size={13} /> Расширенная проверка (10 окон)</>
+          }
+        </button>
+      </div>
+
+      {/* Running indicator */}
+      {runningValidation && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '10px 14px', borderRadius: 'var(--radius-md)',
+          background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.2)',
+        }}>
+          <Loader size={14} color="var(--accent-blue)" style={{ animation: 'spin 1s linear infinite' }} />
+          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            Проверка {selectedSymbol} выполняется…
+          </span>
+        </div>
+      )}
+
+      {/* Result */}
+      {latestResult && !runningValidation && (() => {
+        const r = parseResult(latestResult)
+        const ok = r?.ok as boolean | undefined
+        const hasError = latestResult.status === 'error'
+
+        return (
+          <div className="card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Result header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {hasError
+                  ? <AlertTriangle size={16} color="var(--accent-red)" />
+                  : ok
+                    ? <CheckCircle size={16} color="var(--accent-green)" />
+                    : <AlertTriangle size={16} color="var(--accent-orange)" />
+                }
+                <span style={{ fontSize: 13, fontWeight: 600, color: hasError || !ok ? 'var(--accent-orange)' : 'var(--accent-green)' }}>
+                  {hasError ? 'Ошибка проверки' : ok ? 'Данные корректны' : 'Обнаружены расхождения'}
+                </span>
+              </div>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Последняя проверка: {ageStr(latestResult)}
+              </span>
+            </div>
+
+            {/* Stats */}
+            {r && !hasError && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+                {[
+                  { label: 'Символ', value: latestResult.symbol },
+                  { label: 'Таймфрейм', value: (r.timeframe as string) || '1m' },
+                  { label: 'Проверено окон', value: String(r.windows_checked ?? 0) },
+                  { label: 'Проверено свечей', value: String(r.total_checked ?? 0) },
+                  { label: 'Пропущено', value: String(r.total_missing ?? 0) },
+                  { label: 'Расхождений', value: String(r.total_mismatch ?? 0) },
+                ].map(item => (
+                  <div key={item.label} style={{
+                    background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)',
+                    padding: '8px 10px',
+                  }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 3, fontFamily: 'var(--font-mono)' }}>
+                      {item.label.toUpperCase()}
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {hasError && latestResult.error && (
+              <div style={{ fontSize: 12, color: 'var(--accent-red)' }}>
+                {latestResult.error}
+              </div>
+            )}
+
+            {/* Window-level results */}
+            {r && Array.isArray(r.windows) && (r.windows as Array<Record<string, unknown>>).length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 2 }}>
+                  ДЕТАЛИ ПО ОКНАМ
+                </div>
+                {(r.windows as Array<Record<string, unknown>>).map((w) => {
+                  const wOk = w.ok as boolean
+                  return (
+                    <div key={String(w.window)} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)',
+                    }}>
+                      <span style={{ color: wOk ? 'var(--accent-green)' : 'var(--accent-orange)' }}>
+                        {wOk ? '✓' : '✗'}
+                      </span>
+                      <span>Окно {String(w.window)}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        API={String(w.api_count ?? 0)} БД={String(w.db_count ?? 0)}
+                        {Number(w.missing ?? 0) > 0 ? ` · пропущено: ${String(w.missing)}` : ''}
+                        {Number(w.mismatch ?? 0) > 0 ? ` · расхождений: ${String(w.mismatch)}` : ''}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border-subtle)', paddingTop: 8 }}>
+              Если данные не изменились с последней проверки, результат актуален
+            </div>
+          </div>
+        )
+      })()}
+    </div>
+  )
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 interface Props {
   onRequestStats: () => void
   startBackfill: (symbol: string, period: string) => void
+  runValidation?: (symbol: string, mode: 'quick' | 'full') => void
 }
 
-export default function DataView({ onRequestStats, startBackfill }: Props) {
+export default function DataView({ onRequestStats, startBackfill, runValidation }: Props) {
   const { dbStats, connected } = useStore()
   const [modal,    setModal]    = useState<'candles' | 'orderbook' | null>(null)
   const [backfill, setBackfill] = useState<'candles' | null>(null)
+  const [subTab,   setSubTab]   = useState<'data' | 'testing'>('data')
 
   useEffect(() => {
     if (connected) onRequestStats()
@@ -683,52 +929,94 @@ export default function DataView({ onRequestStats, startBackfill }: Props) {
             Сводка по накопленным рыночным данным
           </p>
         </div>
-        <button
-          onClick={onRequestStats}
-          style={{
-            display:'flex', alignItems:'center', gap:8,
-            background:'var(--bg-elevated)', border:'1px solid var(--border-default)',
-            borderRadius:'var(--radius-md)', padding:'8px 16px',
-            color:'var(--text-secondary)', fontSize:12,
-            cursor:'pointer', fontFamily:'var(--font-body)',
-          }}
-        >
-          <RefreshCw size={13} /> Обновить
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {subTab === 'data' && (
+            <button
+              onClick={onRequestStats}
+              style={{
+                display:'flex', alignItems:'center', gap:8,
+                background:'var(--bg-elevated)', border:'1px solid var(--border-default)',
+                borderRadius:'var(--radius-md)', padding:'8px 16px',
+                color:'var(--text-secondary)', fontSize:12,
+                cursor:'pointer', fontFamily:'var(--font-body)',
+              }}
+            >
+              <RefreshCw size={13} /> Обновить
+            </button>
+          )}
+        </div>
       </div>
 
-      {!dbStats ? (
-        <div style={{ width:'100%',display:'flex', gap:16 }}>
-          <div style={{ display:'flex', flexDirection:'column', gap:8, flex:1 }}>
-            {[1,2,3].map(i => <div key={i} className="skeleton" style={{ height:44, borderRadius:'var(--radius-md)' }} />)}
-          </div>
-          <div className="skeleton" style={{ height:200, flex:1, borderRadius:'var(--radius-lg)' }} />
-        </div>
-      ) : (
-        <div style={{ width:'100%',display:'flex', gap:20, alignItems:'flex-start' }}>
-          {/* Candles */}
-          <div style={{ flex:1, minWidth:0 }}>
-            <SectionHeader
-              title="Свечи (Candles)"
-              count={totalCandles}
-              statusItems={candleStatus}
-              onInfo={() => setModal('candles')}
-              onBackfill={() => setBackfill('candles')}
-            />
-            <CandlesTable rows={dbStats.candles} />
-          </div>
+      {/* Sub-tabs */}
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid var(--border-subtle)', paddingBottom: 0 }}>
+        {(['data', 'testing'] as const).map(tabId => {
+          const label = tabId === 'data' ? 'Данные' : 'Тестирование'
+          const icon  = tabId === 'data'
+            ? <Database size={13} />
+            : <FlaskConical size={13} />
+          return (
+            <button
+              key={tabId}
+              onClick={() => setSubTab(tabId)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '7px 14px',
+                border: 'none', background: 'none', cursor: 'pointer',
+                fontSize: 13, fontFamily: 'var(--font-body)',
+                color: subTab === tabId ? 'var(--text-primary)' : 'var(--text-secondary)',
+                borderBottom: subTab === tabId ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                marginBottom: -1,
+                transition: 'color 0.15s',
+              }}
+            >
+              <span style={{ color: subTab === tabId ? 'var(--accent-blue)' : 'var(--text-muted)' }}>
+                {icon}
+              </span>
+              {label}
+            </button>
+          )
+        })}
+      </div>
 
-          {/* Order Book */}
-          <div style={{ flex:1, minWidth:0 }}>
-            <SectionHeader
-              title="Стакан (Order Book)"
-              count={totalOb}
-              statusItems={obStatus}
-              onInfo={() => setModal('orderbook')}
-            />
-            <OrderBookTable rows={dbStats.orderbook} />
+      {/* Testing panel */}
+      {subTab === 'testing' && (
+        <TestingPanel runValidation={runValidation ?? (() => {})} />
+      )}
+
+      {subTab === 'data' && (
+        !dbStats ? (
+          <div style={{ width:'100%',display:'flex', gap:16 }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:8, flex:1 }}>
+              {[1,2,3].map(i => <div key={i} className="skeleton" style={{ height:44, borderRadius:'var(--radius-md)' }} />)}
+            </div>
+            <div className="skeleton" style={{ height:200, flex:1, borderRadius:'var(--radius-lg)' }} />
           </div>
-        </div>
+        ) : (
+          <div style={{ width:'100%',display:'flex', gap:20, alignItems:'flex-start' }}>
+            {/* Candles */}
+            <div style={{ flex:1, minWidth:0 }}>
+              <SectionHeader
+                title="Свечи (Candles)"
+                count={totalCandles}
+                statusItems={candleStatus}
+                onInfo={() => setModal('candles')}
+                onBackfill={() => setBackfill('candles')}
+              />
+              <CandlesTable rows={dbStats.candles} />
+            </div>
+
+            {/* Order Book */}
+            <div style={{ flex:1, minWidth:0 }}>
+              <SectionHeader
+                title="Стакан (Order Book)"
+                count={totalOb}
+                statusItems={obStatus}
+                onInfo={() => setModal('orderbook')}
+              />
+              <OrderBookTable rows={dbStats.orderbook} />
+            </div>
+          </div>
+        )
       )}
 
       {/* Info modals */}

@@ -237,10 +237,15 @@ async def run_manual_backfill(
     repo: CandlesRepository,
     bus: "EventBus",
     task_id: str,
+    stop_flag: list[bool] | None = None,
+    resume_end_ms: int | None = None,
 ) -> None:
     """
     Загружает исторические 1m-свечи за указанный период, агрегирует все TF.
     Публикует backfill.progress и backfill.complete/error.
+
+    stop_flag  — мутируемый список [bool]; установите stop_flag[0] = True для мягкой остановки.
+    resume_end_ms — если задан, начинаем загрузку с этой позиции (для возобновления).
     """
     period_min = PERIOD_MINUTES.get(period, PERIOD_MINUTES["1w"])
     total_pages = max(1, math.ceil(period_min / MAX_PER_REQUEST))
@@ -260,11 +265,15 @@ async def run_manual_backfill(
 
     now_ms   = int(time.time() * 1000)
     start_ms = now_ms - period_min * 60 * 1000
-    end_ms   = now_ms
+    # resume_end_ms позволяет продолжить с сохранённой позиции
+    end_ms   = resume_end_ms if resume_end_ms is not None else now_ms
     page_dur = MAX_PER_REQUEST * 60 * 1000  # 1m × MAX_PER_REQUEST
     done     = 0
     total_saved = 0
+    # buffer — очищается каждые CHECKPOINT страниц (только для checkpoint-сохранений в БД)
     buffer: list[Candle] = []
+    # all_1m_agg — никогда не очищается, используется для финальной агрегации из памяти
+    all_1m_agg: list[Candle] = []
     CHECKPOINT = 10  # сохраняем в БД каждые N страниц
 
     async def _flush(buf: list[Candle]) -> None:
@@ -274,6 +283,24 @@ async def run_manual_backfill(
 
     try:
         while end_ms > start_ms:
+            # Проверяем флаг остановки
+            if stop_flag is not None and stop_flag[0]:
+                log.info(f"[{task_id}] Бэкфилл остановлен по запросу пользователя (end_ms={end_ms})")
+                # Сохраняем буфер и публикуем паузу
+                if buffer:
+                    await _flush(buffer)
+                    total_saved += len(buffer)
+                    buffer.clear()
+                await bus.publish("backfill.progress", {
+                    "task_id": task_id, "symbol": symbol, "period": period,
+                    "fetched": done, "total": total_pages,
+                    "percent": min(95, int(done / total_pages * 100)),
+                    "current_tf": "1m", "status": "paused",
+                    "checkpoint_end_ms": end_ms,
+                    "total_saved": total_saved,
+                })
+                return
+
             req_start = max(start_ms, end_ms - page_dur)
             try:
                 chunk = await rest_client.fetch_klines(
@@ -284,6 +311,7 @@ async def run_manual_backfill(
                 )
                 if chunk:
                     buffer.extend(chunk)
+                    all_1m_agg.extend(chunk)
             except Exception as e:
                 log.warning(f"[{task_id}] Ошибка запроса {symbol} 1m: {e}")
 
@@ -309,6 +337,8 @@ async def run_manual_backfill(
                 "percent": percent,
                 "current_tf": "1m",
                 "status": "running",
+                "total_saved": total_saved,
+                "checkpoint_end_ms": end_ms,
             })
 
             await asyncio.sleep(REQUEST_SLEEP)
@@ -318,17 +348,18 @@ async def run_manual_backfill(
         total_saved += len(buffer)
         buffer.clear()
 
-        # Агрегируем все TF из сохранённых 1m-свечей в БД
-        log.info(f"[{task_id}] Получено {total_saved:,} 1m-свечей, агрегируем все TF...")
-        await bus.publish("backfill.progress", {
-            "task_id": task_id, "symbol": symbol, "period": period,
-            "fetched": done, "total": total_pages, "percent": 97,
-            "current_tf": "aggregating", "status": "running",
-        })
+        # Агрегируем все TF из накопленных в памяти 1m-свечей (не читаем из БД)
+        log.info(f"[{task_id}] Получено {len(all_1m_agg):,} 1m-свечей в памяти, агрегируем все TF...")
 
-        all_1m = await repo.get_latest(symbol=symbol, timeframe="1m", limit=10_000_000)
-        for tf, tf_min in AGG_TFS.items():
-            agg = _aggregate_1m(all_1m, tf, tf_min)
+        for i, (tf, tf_min) in enumerate(AGG_TFS.items()):
+            agg_percent = 95 + i  # 95, 96, 97 … для каждого TF
+            await bus.publish("backfill.progress", {
+                "task_id": task_id, "symbol": symbol, "period": period,
+                "fetched": done, "total": total_pages, "percent": agg_percent,
+                "current_tf": tf, "status": "running",
+                "total_saved": total_saved,
+            })
+            agg = _aggregate_1m(all_1m_agg, tf, tf_min)
             if agg:
                 await repo.upsert_many(agg)
 
@@ -355,7 +386,8 @@ async def run_manual_backfill(
         "task_id": task_id,
         "symbol": symbol,
         "period": period,
-        "total_fetched": len(all_1m),
+        "total_fetched": len(all_1m_agg),
+        "total_saved": total_saved,
         "status": "complete",
     })
-    log.info(f"[{task_id}] Бэкфилл {symbol} завершён: {len(all_1m)} 1m-свечей + агрегаты")
+    log.info(f"[{task_id}] Бэкфилл {symbol} завершён: {len(all_1m_agg)} 1m-свечей + агрегаты")

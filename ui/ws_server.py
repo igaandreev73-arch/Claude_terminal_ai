@@ -17,12 +17,19 @@ WebSocket Server — мост между Python бэкендом и React фро
   close_position  — закрыть позицию
   set_mode        — изменить режим исполнения
   get_state       — запросить текущее состояние системы
+  start_backfill  — запустить ручной бэкфилл
+  stop_task       — мягко остановить задачу (пауза с checkpoint)
+  resume_task     — возобновить приостановленную задачу
+  get_tasks       — получить список активных + завершённых задач
+  run_validation  — запустить проверку данных
 
 Публикует: нет (только проксирует события шины)
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 import weakref
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
@@ -32,6 +39,7 @@ from aiohttp.web_ws import WebSocketResponse
 
 from core.event_bus import Event, EventBus
 from core.logger import get_logger
+from storage.repositories.tasks_repo import TasksRepository
 
 if TYPE_CHECKING:
     from execution.execution_engine import ExecutionEngine
@@ -56,6 +64,7 @@ BROADCAST_EVENTS = {
     "execution.pending", "execution.confirmed", "execution.rejected", "execution.blocked",
     "demo.trade.opened", "demo.trade.closed", "demo.stats.updated",
     "backfill.progress", "backfill.complete", "backfill.error",
+    "validation.result",
     "HEALTH_UPDATE",
 }
 
@@ -81,7 +90,9 @@ class WSServer:
         self._clients: weakref.WeakSet[WebSocketResponse] = weakref.WeakSet()
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
-        self._active_backfills: dict[str, dict] = {}  # task_id → {symbol, period, percent, fetched, total}
+        # task_id → {symbol, period, percent, fetched, total, status, stop_flag, start_time, candles_fetched}
+        self._active_backfills: dict[str, dict] = {}
+        self._tasks_repo = TasksRepository()
 
     async def start(self) -> None:
         # Подписываемся на все события шины
@@ -194,6 +205,18 @@ class WSServer:
         elif command == "start_backfill":
             await self._handle_start_backfill(ws, payload)
 
+        elif command == "stop_task":
+            await self._handle_stop_task(ws, payload)
+
+        elif command == "resume_task":
+            await self._handle_resume_task(ws, payload)
+
+        elif command == "get_tasks":
+            await self._handle_get_tasks(ws)
+
+        elif command == "run_validation":
+            await self._handle_run_validation(ws, payload)
+
         elif command == "get_db_stats":
             await self._send_db_stats(ws)
 
@@ -216,29 +239,322 @@ class WSServer:
             await self._send(ws, {"type": "backfill_rejected", "task_id": task_id, "reason": "not_configured"})
             return
 
+        stop_flag: list[bool] = [False]
+        now_ts = int(time.time())
+
         self._active_backfills[task_id] = {
             "task_id": task_id, "symbol": symbol, "period": period,
             "percent": 0, "fetched": 0, "total": 0, "status": "running",
+            "stop_flag": stop_flag,
+            "start_time": time.time(),
+            "candles_fetched": 0,
+            "speed_cps": 0.0,
+            "eta_seconds": None,
         }
 
+        # Сохраняем задачу в БД
+        await self._tasks_repo.upsert({
+            "task_id": task_id, "type": "backfill",
+            "symbol": symbol, "period": period,
+            "status": "running", "percent": 0,
+            "fetched": 0, "total_pages": 0, "total_saved": 0,
+            "created_at": now_ts,
+        })
+
         # Обновляем кэш прогресса при каждом backfill.progress событии
-        def _on_progress(event):
+        async def _on_progress(event):
             d = event.data
             if d.get("task_id") == task_id:
                 info = self._active_backfills.get(task_id)
                 if info:
                     info.update({k: d[k] for k in ("percent", "fetched", "total", "status") if k in d})
+                    # Вычисляем скорость
+                    elapsed = time.time() - info["start_time"]
+                    total_fetched = d.get("total_saved", 0) or d.get("fetched", 0) * 1440
+                    if elapsed > 0 and total_fetched > 0:
+                        speed = total_fetched / elapsed
+                        info["speed_cps"] = round(speed, 1)
+                        pct = d.get("percent", 0)
+                        if pct > 0 and pct < 100:
+                            remaining_pct = 95 - pct if pct < 95 else 0
+                            eta = (remaining_pct / pct) * elapsed if pct > 0 else None
+                            info["eta_seconds"] = round(eta) if eta else None
+
         self._bus.subscribe("backfill.progress", _on_progress)
 
         async def _run():
             try:
-                await run_manual_backfill(symbol, period, self._rest_client, self._candles_repo, self._bus, task_id)
+                await run_manual_backfill(
+                    symbol, period,
+                    self._rest_client, self._candles_repo, self._bus, task_id,
+                    stop_flag=stop_flag,
+                )
+            except asyncio.CancelledError:
+                pass
             finally:
                 self._active_backfills.pop(task_id, None)
 
-        import asyncio as _asyncio
-        _asyncio.create_task(_run())
+        asyncio.create_task(_run())
         log.info(f"Запущен ручной бэкфилл: {symbol} {period} [{task_id}]")
+
+    async def _handle_stop_task(self, ws: WebSocketResponse, payload: dict) -> None:
+        task_id = payload.get("task_id", "")
+        info = self._active_backfills.get(task_id)
+        if not info:
+            await self._send(ws, {"type": "error", "message": f"Задача {task_id} не найдена"})
+            return
+
+        # Устанавливаем флаг остановки
+        stop_flag = info.get("stop_flag")
+        if stop_flag is not None:
+            stop_flag[0] = True
+
+        log.info(f"Запрос на остановку задачи {task_id}")
+
+    async def _handle_resume_task(self, ws: WebSocketResponse, payload: dict) -> None:
+        from data.backfill import run_manual_backfill
+        task_id = payload.get("task_id", "")
+
+        # Загружаем из БД
+        task = await self._tasks_repo.get(task_id)
+        if not task or task["status"] != "paused":
+            await self._send(ws, {"type": "error", "message": f"Задача {task_id} не найдена или не приостановлена"})
+            return
+
+        if not self._rest_client or not self._candles_repo:
+            await self._send(ws, {"type": "error", "message": "REST клиент не настроен"})
+            return
+
+        symbol   = task["symbol"]
+        period   = task["period"]
+        resume_end_ms = task.get("checkpoint_end_ms")
+
+        # Создаём новый task_id для возобновлённой задачи (или используем тот же)
+        new_task_id = task_id
+        stop_flag: list[bool] = [False]
+
+        self._active_backfills[new_task_id] = {
+            "task_id": new_task_id, "symbol": symbol, "period": period,
+            "percent": task.get("percent", 0),
+            "fetched": task.get("fetched", 0),
+            "total": task.get("total_pages", 0),
+            "status": "running",
+            "stop_flag": stop_flag,
+            "start_time": time.time(),
+            "candles_fetched": 0,
+            "speed_cps": 0.0,
+            "eta_seconds": None,
+        }
+
+        await self._tasks_repo.mark_status(new_task_id, "running")
+
+        async def _run():
+            try:
+                await run_manual_backfill(
+                    symbol, period,
+                    self._rest_client, self._candles_repo, self._bus, new_task_id,
+                    stop_flag=stop_flag,
+                    resume_end_ms=resume_end_ms,
+                )
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._active_backfills.pop(new_task_id, None)
+
+        asyncio.create_task(_run())
+        log.info(f"Возобновлён бэкфилл: {symbol} {period} [{new_task_id}] от end_ms={resume_end_ms}")
+
+    async def _handle_get_tasks(self, ws: WebSocketResponse) -> None:
+        running = list(self._active_backfills.values())
+        # Убираем непереносимые объекты (stop_flag) перед отправкой
+        running_clean = [
+            {k: v for k, v in t.items() if k != "stop_flag"}
+            for t in running
+        ]
+        recent = await self._tasks_repo.get_recent(limit=20)
+        paused = await self._tasks_repo.get_paused()
+        await self._send(ws, {
+            "type": "tasks_list",
+            "running": running_clean,
+            "paused": paused,
+            "recent": recent,
+        })
+
+    async def _handle_run_validation(self, ws: WebSocketResponse, payload: dict) -> None:
+        """Запускает проверку данных и публикует результат."""
+        symbol = payload.get("symbol", "BTC/USDT")
+        mode   = payload.get("mode", "quick")  # 'quick' (3 окна) или 'full' (10 окон)
+        windows = 3 if mode == "quick" else 10
+        task_id = f"validation-{symbol}-{int(time.time())}"
+
+        asyncio.create_task(self._run_validation_task(task_id, symbol, windows))
+
+    async def _run_validation_task(self, task_id: str, symbol: str, windows: int) -> None:
+        """Выполняет валидацию в фоне и публикует результат."""
+        import aiohttp as _aiohttp
+        from sqlalchemy import func, select
+        from storage.database import get_session_factory
+        from storage.models import CandleModel
+
+        BASE_URL  = "https://open-api.bingx.com"
+        TF        = "1m"
+        WINDOW    = 50
+        VOL_TOL   = 0.001
+        PRICE_TOL = 0.001
+
+        def fmt_sym(s: str) -> str:
+            return s.replace("/", "-")
+
+        factory = get_session_factory()
+
+        # Узнаём диапазон данных в БД
+        try:
+            async with factory() as session:
+                row = await session.execute(
+                    select(
+                        func.min(CandleModel.open_time),
+                        func.max(CandleModel.open_time),
+                    ).where(
+                        CandleModel.symbol == symbol,
+                        CandleModel.timeframe == TF,
+                    )
+                )
+                min_ts, max_ts = row.one()
+        except Exception as e:
+            await self._bus.publish("validation.result", {
+                "task_id": task_id, "symbol": symbol,
+                "status": "error", "error": str(e),
+            })
+            return
+
+        if not min_ts or not max_ts:
+            await self._bus.publish("validation.result", {
+                "task_id": task_id, "symbol": symbol,
+                "status": "error", "error": "Нет данных в БД",
+            })
+            return
+
+        import random
+        span = max_ts - min_ts
+        window_ms = WINDOW * 60 * 1000
+
+        total_checked  = 0
+        total_missing  = 0
+        total_mismatch = 0
+        window_results = []
+
+        try:
+            connector = _aiohttp.TCPConnector(resolver=_aiohttp.ThreadedResolver())
+            async with _aiohttp.ClientSession(
+                connector=connector,
+                timeout=_aiohttp.ClientTimeout(total=15),
+            ) as http:
+                for w in range(windows):
+                    if span <= window_ms:
+                        start = min_ts
+                    else:
+                        start = random.randint(min_ts, max_ts - window_ms)
+                    end = start + window_ms
+
+                    # Fetch from API
+                    params = {
+                        "symbol": fmt_sym(symbol),
+                        "interval": TF,
+                        "startTime": start,
+                        "endTime": end,
+                        "limit": WINDOW + 5,
+                    }
+                    try:
+                        async with http.get(
+                            f"{BASE_URL}/openApi/swap/v3/quote/klines",
+                            params=params,
+                        ) as resp:
+                            data = await resp.json()
+                        api_data: dict[int, dict] = {}
+                        for r in data.get("data", []):
+                            t = int(r["time"])
+                            api_data[t] = {
+                                "open":   float(r["open"]),
+                                "high":   float(r["high"]),
+                                "low":    float(r["low"]),
+                                "close":  float(r["close"]),
+                                "volume": float(r["volume"]),
+                            }
+                    except Exception:
+                        api_data = {}
+
+                    # Fetch from DB
+                    async with factory() as session:
+                        rows = await session.execute(
+                            select(CandleModel).where(
+                                CandleModel.symbol == symbol,
+                                CandleModel.timeframe == TF,
+                                CandleModel.open_time >= start,
+                                CandleModel.open_time <= end,
+                            ).order_by(CandleModel.open_time)
+                        )
+                        db_rows = rows.scalars().all()
+                    db_data: dict[int, dict] = {
+                        c.open_time: {
+                            "open": c.open, "high": c.high,
+                            "low": c.low, "close": c.close, "volume": c.volume,
+                        }
+                        for c in db_rows
+                    }
+
+                    api_times = set(api_data)
+                    db_times  = set(db_data)
+                    missing   = len(api_times - db_times)
+                    common    = api_times & db_times
+                    mismatches = 0
+                    for ts in common:
+                        for field in ("open", "high", "low", "close"):
+                            diff = abs(api_data[ts][field] - db_data[ts][field])
+                            rel  = diff / api_data[ts][field] if api_data[ts][field] else 0
+                            if rel > PRICE_TOL:
+                                mismatches += 1
+                                break
+                        else:
+                            vdiff = abs(api_data[ts]["volume"] - db_data[ts]["volume"]) / (api_data[ts]["volume"] or 1)
+                            if vdiff > VOL_TOL:
+                                mismatches += 1
+
+                    total_checked  += len(api_times)
+                    total_missing  += missing
+                    total_mismatch += mismatches
+                    window_results.append({
+                        "window": w + 1,
+                        "start_ms": start,
+                        "end_ms": end,
+                        "api_count": len(api_times),
+                        "db_count": len(db_times),
+                        "missing": missing,
+                        "mismatch": mismatches,
+                        "ok": missing == 0 and mismatches == 0,
+                    })
+                    await asyncio.sleep(0.5)
+
+        except Exception as e:
+            await self._bus.publish("validation.result", {
+                "task_id": task_id, "symbol": symbol,
+                "status": "error", "error": str(e),
+            })
+            return
+
+        overall_ok = total_missing == 0 and total_mismatch == 0
+        await self._bus.publish("validation.result", {
+            "task_id": task_id,
+            "symbol": symbol,
+            "timeframe": TF,
+            "windows_checked": windows,
+            "total_checked": total_checked,
+            "total_missing": total_missing,
+            "total_mismatch": total_mismatch,
+            "ok": overall_ok,
+            "windows": window_results,
+            "status": "completed",
+            "ts": int(time.time()),
+        })
 
     async def _send_candles(self, ws: WebSocketResponse, symbol: str, tf: str, limit: int) -> None:
         from storage.repositories.candles_repo import CandlesRepository
@@ -340,6 +656,65 @@ class WSServer:
     async def _on_event(self, event: Event) -> None:
         if not self._clients:
             return
+
+        # Обновляем БД при завершении/паузе/ошибке бэкфилла
+        et = event.type
+        d  = event.data if isinstance(event.data, dict) else {}
+        tid = d.get("task_id", "")
+
+        if et == "backfill.progress" and tid:
+            status = d.get("status", "running")
+            if status == "paused":
+                await self._tasks_repo.mark_status(
+                    tid, "paused",
+                    percent=d.get("percent", 0),
+                    fetched=d.get("fetched", 0),
+                    total_pages=d.get("total", 0),
+                    total_saved=d.get("total_saved", 0),
+                    checkpoint_end_ms=d.get("checkpoint_end_ms"),
+                )
+                self._active_backfills.pop(tid, None)
+            else:
+                await self._tasks_repo.mark_status(
+                    tid, "running",
+                    percent=d.get("percent", 0),
+                    fetched=d.get("fetched", 0),
+                    total_pages=d.get("total", 0),
+                    total_saved=d.get("total_saved", 0),
+                    checkpoint_end_ms=d.get("checkpoint_end_ms"),
+                    speed_cps=self._active_backfills.get(tid, {}).get("speed_cps", 0),
+                )
+        elif et == "backfill.complete" and tid:
+            await self._tasks_repo.mark_status(
+                tid, "completed",
+                percent=100,
+                total_saved=d.get("total_saved", d.get("total_fetched", 0)),
+            )
+            self._active_backfills.pop(tid, None)
+        elif et == "backfill.error" and tid:
+            await self._tasks_repo.mark_status(
+                tid, "error",
+                error=d.get("error", ""),
+            )
+            self._active_backfills.pop(tid, None)
+
+        # Добавляем speed_cps и eta_seconds в прогресс-событие из кэша
+        if et == "backfill.progress" and tid and tid in self._active_backfills:
+            info = self._active_backfills[tid]
+            augmented_data = {
+                **d,
+                "speed_cps":   info.get("speed_cps", 0),
+                "eta_seconds": info.get("eta_seconds"),
+            }
+            message = {
+                "type": "event",
+                "event_type": event.type,
+                "data": _serialise(augmented_data),
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            await self._broadcast(message)
+            return
+
         message = {
             "type": "event",
             "event_type": event.type,
@@ -383,12 +758,22 @@ class WSServer:
         positions = self._execution_engine.get_positions()
         mode = self._execution_engine.mode.value
 
+        # Активные задачи (без stop_flag)
+        active_backfills_clean = [
+            {k: v for k, v in t.items() if k != "stop_flag"}
+            for t in self._active_backfills.values()
+        ]
+
+        # Приостановленные задачи из БД
+        paused_tasks = await self._tasks_repo.get_paused()
+
         await self._send(ws, {
             "type": "state",
             "positions": positions,
             "signals": signals,
             "mode": mode,
-            "active_backfills": list(self._active_backfills.values()),
+            "active_backfills": active_backfills_clean,
+            "paused_tasks": paused_tasks,
         })
 
 

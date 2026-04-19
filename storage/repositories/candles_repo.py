@@ -49,34 +49,35 @@ class CandlesRepository:
         """Пакетная вставка. Возвращает количество обработанных записей."""
         if not candles:
             return 0
+        BATCH_SIZE = 500
+        now = int(time.time())
         factory = get_session_factory()
         async with factory() as session:
-            for candle in candles:
-                stmt = (
-                    insert(CandleModel)
-                    .values(
-                        symbol=candle.symbol,
-                        timeframe=candle.timeframe,
-                        open_time=candle.open_time,
-                        open=candle.open,
-                        high=candle.high,
-                        low=candle.low,
-                        close=candle.close,
-                        volume=candle.volume,
-                        is_closed=candle.is_closed,
-                        source=candle.source,
-                        created_at=int(time.time()),
+            for i in range(0, len(candles), BATCH_SIZE):
+                batch = candles[i : i + BATCH_SIZE]
+                rows = [
+                    dict(
+                        symbol=c.symbol,
+                        timeframe=c.timeframe,
+                        open_time=c.open_time,
+                        open=c.open,
+                        high=c.high,
+                        low=c.low,
+                        close=c.close,
+                        volume=c.volume,
+                        is_closed=c.is_closed,
+                        source=c.source,
+                        created_at=now,
                     )
-                    .on_conflict_do_update(
-                        index_elements=["symbol", "timeframe", "open_time"],
-                        set_=dict(
-                            high=candle.high,
-                            low=candle.low,
-                            close=candle.close,
-                            volume=candle.volume,
-                            is_closed=candle.is_closed,
-                        ),
-                    )
+                    for c in batch
+                ]
+                stmt = insert(CandleModel).values(rows)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["symbol", "timeframe", "open_time"],
+                    set_={
+                        col: getattr(stmt.excluded, col)
+                        for col in ("high", "low", "close", "volume", "is_closed")
+                    },
                 )
                 await session.execute(stmt)
             await session.commit()

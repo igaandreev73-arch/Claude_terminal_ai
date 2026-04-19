@@ -2,6 +2,24 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
+export interface TaskInfo {
+  task_id: string
+  type: string       // 'backfill' | 'validation'
+  symbol: string
+  period?: string
+  status: string     // 'running' | 'paused' | 'completed' | 'error' | 'cancelled'
+  percent: number
+  fetched: number
+  total_pages: number
+  total_saved?: number
+  speed_cps?: number
+  eta_seconds?: number
+  start_time?: number
+  result?: string
+  error?: string
+  created_at?: number
+}
+
 export interface AppNotification {
   id: string
   type: 'progress' | 'success' | 'error' | 'info'
@@ -80,6 +98,11 @@ interface Store {
   chartTf: string
   setChartSymbol: (s: string) => void
   setChartTf: (tf: string) => void
+
+  tasks: TaskInfo[]
+  upsertTask: (t: TaskInfo) => void
+  removeTask: (task_id: string) => void
+  clearCompletedTasks: () => void
 }
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -150,6 +173,22 @@ export const useStore = create<Store>()(persist((set) => ({
   chartTf: '1m',
   setChartSymbol: (s) => set({ chartSymbol: s }),
   setChartTf: (tf) => set({ chartTf: tf }),
+
+  tasks: [],
+  upsertTask: (t) =>
+    set((s) => {
+      const idx = s.tasks.findIndex((x) => x.task_id === t.task_id)
+      if (idx >= 0) {
+        const next = [...s.tasks]
+        next[idx] = { ...next[idx], ...t }
+        return { tasks: next }
+      }
+      return { tasks: [t, ...s.tasks].slice(0, 100) }
+    }),
+  removeTask: (task_id) =>
+    set((s) => ({ tasks: s.tasks.filter((t) => t.task_id !== task_id) })),
+  clearCompletedTasks: () =>
+    set((s) => ({ tasks: s.tasks.filter((t) => t.status === 'running' || t.status === 'paused') })),
 }), {
   name: 'terminal-ui',
   partialize: (state) => ({
