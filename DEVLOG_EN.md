@@ -38,7 +38,7 @@ Next step: ...
 
 ## Entries
 
-### [2026-04-19] Data integrity: backfill, TF aggregation, notifications, UX fixes
+### [2026-04-19] Data integrity: backfill, TF aggregation, WAL, auto-repair, logs, cross-validation
 
 **Done:**
 
@@ -52,14 +52,45 @@ Next step: ...
 - Discovered DB anomaly: more 5m candles than 1m (each TF was fetched independently with different time windows)
 - Decision: only fetch `1m` via REST API, aggregate all other TFs locally
 - `_aggregate_1m(candles_1m, tf, tf_min)`: groups into aligned time windows, skips incomplete candles
-- `_save_with_aggregates(candles_1m, repo)`: saves 1m + 5m + 15m + 1h + 4h + 1d in one call
+- `_save_with_aggregates(candles_1m, repo)`: saves 1m + all AGG_TFS in one call
 - `run_backfill` (auto-start): fetches last 2000 1m candles if DB has fewer
-- `run_manual_backfill`: paginates backwards from `now_ms` for the requested period, aggregates and saves
+- `run_manual_backfill`: paginates backwards for the requested period, aggregates and saves
+
+**Complete AGG_TFS coverage (`data/backfill.py`):**
+- Original `AGG_TFS` only included 5m/15m/1h/4h/1d — missing 3m/30m/2h
+- Added `3m (3), 30m (30), 2h (120)` → full set: 3m/5m/15m/30m/1h/2h/4h/1d
+- Stale mismatched data repaired via `repair_integrity()` on the next startup
+
+**TF integrity auto-repair on startup (`data/backfill.py → repair_integrity()`):**
+- Checks proportions: `|actual - expected| / expected > 10%` for each TF
+- On violation: deletes all aggregated TFs and recalculates from 1m candles
+- Runs automatically every time `main.py` starts, before backfill
+- Result: accumulated violations for all 5 pairs resolved in one startup
+
+**Last 48h refresh from REST API (`data/backfill.py → refresh_recent()`):**
+- New function: overwrites the last 48 hours of 1m candles from REST on every startup
+- 2 requests × 1440 candles = full 48h coverage (API hard limit = 1440 per request)
+- Fixes WS artifacts: WebSocket detects candle close by the next tick's `open_time` changing — exchange may not have finalized all trades at that exact moment
+- Startup chain: `repair_integrity → refresh_recent → run_backfill`
 
 **DB cleanup and recalculation:**
 - Added `CandlesRepository.delete_timeframe(symbol, tf)` to clear a single TF
-- All 5 pairs (BTC, ETH, SOL, BNB, XRP) had stale aggregated TFs deleted and recalculated from 1m
-- BNB/USDT: 10092 1m → 2017 5m → 671 15m → 167 1h → 41 4h → 6 1d (correct proportions)
+- All 5 pairs had stale aggregated TFs deleted and recalculated from 1m candles
+- BTC/USDT: 43,225 1m → 14,407 3m → 8,644 5m → 2,881 15m → 1,440 30m → 720 1h → 360 2h → 179 4h → 29 1d
+
+**SQLite WAL mode (`storage/database.py`):**
+- `PRAGMA journal_mode=WAL` — concurrent readers with one writer (no more locks)
+- `PRAGMA busy_timeout=30000` — 30s wait instead of instant `database is locked` error
+- `PRAGMA synchronous=NORMAL` — reliability/speed balance
+- `connect_args={"timeout": 30}` — driver-level timeout for aiosqlite
+
+**Log size reduction (`core/logger.py`):**
+- `LOG_LEVEL=DEBUG → INFO` in `.env` — stopped the flood of debug messages
+- File logs always at `INFO` regardless of `LOG_LEVEL`
+- `retention=7` files instead of `"30 days"` — prevents GB accumulation of log files
+- `compression="gz"` — rotated files compressed automatically
+- Removed `log.debug()` from `EventBus.subscribe/publish` — was generating 25+ lines/sec from candle events
+- Project size: 913 MB → ~50 MB (after cleaning old logs)
 
 **BackfillModal: multi-pair selection (`ui/react-app/src/components/DataView.tsx`):**
 - Toggle buttons to select one or more pairs (blue border = selected)
@@ -75,13 +106,23 @@ Next step: ...
 - WS `backfill.progress` events update the existing notification via `updateNotification` (no duplicates)
 
 **Auto-load DB stats (`ui/react-app/src/components/DataView.tsx`):**
-- Before: `useEffect(() => { onRequestStats() }, [])` — command sent on mount, but if WS not yet open (page refresh, `activeTab='data'` saved in persist) — command silently dropped
-- Now: `useEffect(() => { if (connected) onRequestStats() }, [connected])` — requests as soon as connection is established, re-requests on reconnect
+- Before: `useEffect([], [])` — command sent on mount but WS not yet open → silently dropped
+- Now: `useEffect(() => { if (connected) onRequestStats() }, [connected])` — fires when WS is ready, re-fires on reconnect
+
+**Cross-validation of DB data vs BingX API (`scripts/validate_candles.py`):**
+- New script: 3 random 50-candle windows per pair from DB compared against BingX REST API
+- Price tolerance `0.1%`, volume tolerance `0.1%` — realistic for WS vs REST settlement pipeline
+- Final result after all fixes: 5/5 pairs ✓ OK, 750 checks, 0 mismatches
+- Revealed WS artifact nature: BingX continuously settles recent candles; sub-0.1% is normal exchange behaviour
+- Windows compatibility: `aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())` instead of aiodns
 
 **Decisions:**
-- Aggregating from 1m guarantees mathematical consistency: 5m candle = exactly 5 one-minute candles, boundaries always aligned, no "artifact" data from the API
-- `startBackfill` in `useWebSocket` (not in `DataView`) — the only place where `notifMapRef` exists; notification creation and tracking in one place without prop-drilling
-- Reacting to `connected` instead of `[]` in useEffect — the only reliable way to wait for an open WS connection before sending a command
+- Aggregating from 1m guarantees mathematical consistency across all TFs — no "artifact" data from API
+- `repair_integrity` on every startup — protection against TF proportion drift during WS disconnects
+- `refresh_recent` = 48h (2 × 1440) — covers full WS window with margin; one startup fixes everything
+- `PRICE_TOL = 0.001` in validation — BingX adjusts closed candles within 0.1% until full settlement
+- WAL + busy_timeout: SQLite without locks when analytics reads happen during WS data writes
+- `startBackfill` in `useWebSocket` (not `DataView`) — `notifMapRef` lives here; no prop-drilling needed
 
 **Postponed:**
 - Progress timeline visualization on the Data tab (after completion — refresh DataView without re-requesting)
@@ -89,11 +130,11 @@ Next step: ...
 Tests:
   Unit:        —
   Integration: —
-  Smoke:       ✅ backfill for 5 pairs, proportion check in DB
+  Smoke:       ✅ 5/5 pairs, 750 checks vs BingX API, 0 mismatches
   Coverage:    n/a
 
-Commit: `—`
-Next step: Load historical data, then AI Advisor / ML Dataset (Phase 1-G)
+Commits: `050c2dd` `744925c` `8512365` `76fe105` `bd5f6c6`
+Next step: AI Advisor / ML Dataset (Phase 1-G)
 
 ---
 

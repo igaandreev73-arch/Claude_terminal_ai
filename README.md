@@ -14,11 +14,16 @@
 - Непрерывный сбор рыночных данных (WebSocket + REST) по топ-5 парам
 - Технический анализ, концепции SmartMoney, объёмный анализ — одновременно на всех таймфреймах
 - Анализ стакана: детектор манипуляций, расчёт проскальзывания, дисбаланс bid/ask
-- Бэктестинг стратегий с авто-оптимизацией параметров
+- Бэктестинг стратегий с авто-оптимизацией параметров (Grid Search + Walk-forward)
 - Три режима исполнения: авто / полуавто / только алёрт
 - Встроенный AI-ассистент с доступом к состоянию всей системы
 - Event Bus Monitor — живой поток всех внутренних событий
 - Сбор ML-датасета с первого дня работы
+- Авторемонт целостности данных при каждом старте (`repair_integrity`)
+- Перезапись последних 48 часов из REST API для устранения WS-артефактов (`refresh_recent`)
+- SQLite WAL-режим — параллельные читатели без блокировок
+- Мультиселект пар в модале исторической загрузки
+- Кросс-валидация данных vs BingX API (`scripts/validate_candles.py`)
 
 ### Стек
 
@@ -45,11 +50,16 @@ A crypto trading terminal with an analytical core, automatic signal generation, 
 - Continuous market data collection (WebSocket + REST) for top-5 pairs
 - Technical analysis, SmartMoney concepts, volume analysis — across all timeframes simultaneously
 - Order book analysis: manipulation detector, slippage calculation, bid/ask imbalance
-- Strategy backtesting with automatic parameter optimization
+- Strategy backtesting with automatic parameter optimization (Grid Search + Walk-forward)
 - Three execution modes: auto / semi-auto / alert only
 - Built-in AI advisor with full system state access
 - Event Bus Monitor — live stream of all internal events
 - ML dataset collection from day one
+- TF integrity auto-repair on every startup (`repair_integrity`)
+- Last 48h REST refresh to eliminate WebSocket artifacts (`refresh_recent`)
+- SQLite WAL mode — concurrent readers without locking
+- Multi-pair selection in the historical data download modal
+- Cross-validation of DB candles vs BingX API (`scripts/validate_candles.py`)
 
 ### Stack
 
