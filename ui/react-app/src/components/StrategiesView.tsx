@@ -59,6 +59,11 @@ const STRATEGIES: StrategyDef[] = [
     ],
     tags: ['multi-TF', 'SMC', 'Volume', 'live'],
     module: 'analytics/mtf_confluence.py\nsignals/signal_engine.py',
+    backtestParams: [
+      { key: 'min_score', label: 'Порог сигнала', defaultValue: 60, min: 50, max: 80, step: 5,     unit: '/100' },
+      { key: 'sl_pct',    label: 'Stop-Loss',      defaultValue: 0.02, min: 0.005, max: 0.1, step: 0.005, unit: 'доля (0.02=2%)' },
+      { key: 'tp_pct',    label: 'Take-Profit',   defaultValue: 0.04, min: 0.01,  max: 0.2, step: 0.01,  unit: 'доля (0.04=4%)' },
+    ],
   },
   {
     id: 'ma-crossover',
@@ -287,8 +292,9 @@ interface BacktestModalProps {
 }
 
 function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpenOptimizer }: BacktestModalProps) {
-  const backtestRunning = useStore(s => s.backtestRunning)
-  const backtestResults = useStore(s => s.backtestResults)
+  const backtestRunning  = useStore(s => s.backtestRunning)
+  const backtestProgress = useStore(s => s.backtestProgress)
+  const backtestResults  = useStore(s => s.backtestResults)
 
   const [selSymbol, setSelSymbol] = useState(SYMBOLS[0])
   const [selTf, setSelTf]         = useState('1h')
@@ -302,7 +308,8 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
 
   useEffect(() => { onGetResults(def.id) }, [def.id])
 
-  const isRunning = backtestRunning[def.id] ?? false
+  const isRunning  = backtestRunning[def.id]  ?? false
+  const progress   = backtestProgress[def.id] ?? 0
   const currentKey = `${def.id}:${selSymbol}:${selTf}`
   const currentResult: BacktestResultUI | undefined = backtestResults[currentKey]
 
@@ -310,10 +317,7 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
     .filter(r => r.strategy_id === def.id)
     .sort((a, b) => b.created_at - a.created_at)
 
-  const canBacktest = !!def.backtestParams?.length
-
   function handleRun() {
-    if (!canBacktest) return
     onRun(def.id, selSymbol, selTf, paramValues)
   }
 
@@ -356,7 +360,7 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
       </div>
 
       {/* Editable params */}
-      {canBacktest && (
+      {(def.backtestParams?.length ?? 0) > 0 && (
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 10, fontWeight: 700, letterSpacing: '0.07em' }}>ПАРАМЕТРЫ СТРАТЕГИИ</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
@@ -381,18 +385,18 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
       )}
 
       {/* Action buttons */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: isRunning ? 12 : 24 }}>
         <button
-          onClick={handleRun} disabled={isRunning || !canBacktest}
+          onClick={handleRun} disabled={isRunning}
           style={{
             flex: 1, padding: '11px', border: 'none', borderRadius: 'var(--radius-md)',
-            fontSize: 13, fontWeight: 700, cursor: isRunning || !canBacktest ? 'not-allowed' : 'pointer',
-            background: isRunning || !canBacktest ? 'var(--bg-elevated)' : def.accent,
-            color: isRunning || !canBacktest ? 'var(--text-muted)' : '#000',
+            fontSize: 13, fontWeight: 700, cursor: isRunning ? 'not-allowed' : 'pointer',
+            background: isRunning ? 'var(--bg-elevated)' : def.accent,
+            color: isRunning ? 'var(--text-muted)' : '#000',
             transition: 'opacity 0.15s',
           }}
         >
-          {isRunning ? '⟳ Выполняется...' : !canBacktest ? 'Бэктест недоступен для этой стратегии' : '▶ Запустить бэктест'}
+          {isRunning ? `⟳ Прогон стратегии... ${progress}%` : '▶ Запустить бэктест'}
         </button>
         {def.defaultParamGrid && (
           <button
@@ -410,6 +414,24 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
           </button>
         )}
       </div>
+
+      {/* Прогресс-бар */}
+      {isRunning && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ height: 6, background: 'var(--bg-elevated)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 3,
+              width: `${progress}%`,
+              background: `linear-gradient(90deg, ${def.accent}, ${def.accent}bb)`,
+              transition: 'width 0.4s ease',
+              boxShadow: `0 0 8px ${def.accent}66`,
+            }} />
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, fontFamily: 'var(--font-mono)' }}>
+            Прогон по историческим свечам: {progress}% завершено
+          </div>
+        </div>
+      )}
 
       {/* Results */}
       {currentResult && (

@@ -65,7 +65,7 @@ BROADCAST_EVENTS = {
     "demo.trade.opened", "demo.trade.closed", "demo.stats.updated",
     "backfill.progress", "backfill.complete", "backfill.error",
     "validation.result",
-    "backtest.started", "backtest.completed", "backtest.error",
+    "backtest.started", "backtest.progress", "backtest.completed", "backtest.error",
     "optimizer.started", "optimizer.completed", "optimizer.error",
     "HEALTH_UPDATE",
 }
@@ -395,7 +395,11 @@ class WSServer:
 
     def _strategy_registry(self) -> dict:
         from strategies.simple_ma_strategy import SimpleMAStrategy
-        return {"ma-crossover": SimpleMAStrategy}
+        from strategies.mtf_confluence_strategy import MTFConfluenceStrategy
+        return {
+            "ma-crossover":    SimpleMAStrategy,
+            "mtf-confluence":  MTFConfluenceStrategy,
+        }
 
     async def _handle_run_backtest(self, ws: WebSocketResponse, payload: dict) -> None:
         strategy_id = payload.get("strategy_id", "")
@@ -448,9 +452,23 @@ class WSServer:
             strategy = registry[strategy_id](params=params or {})
             engine = BacktestEngine()
             loop = asyncio.get_event_loop()
+
+            def _progress_cb(current: int, total: int) -> None:
+                pct = min(90, int(current / total * 90)) if total else 0
+                asyncio.run_coroutine_threadsafe(
+                    self._broadcast_event("backtest.progress", {
+                        "strategy_id": strategy_id, "run_id": run_id,
+                        "percent": pct, "current": current, "total": total,
+                    }),
+                    loop,
+                )
+
             result = await loop.run_in_executor(
                 None,
-                lambda: engine.run(strategy, candles_data, BacktestConfig(), symbol, timeframe),
+                lambda: engine.run(
+                    strategy, candles_data, BacktestConfig(), symbol, timeframe,
+                    on_progress=_progress_cb,
+                ),
             )
 
             eq = result.equity_curve

@@ -19,6 +19,7 @@ export function useWebSocket() {
     upsertTask,
     setBacktestResult, setOptimizerResult,
     setBacktestRunning, setOptimizerRunning,
+    setBacktestProgress,
   } = useStore()
 
   // taskId → notificationId (для обновления прогресс-уведомлений)
@@ -218,6 +219,11 @@ export function useWebSocket() {
       }
       if (eventType === 'backtest.started') {
         setBacktestRunning(data.strategy_id as string, true)
+        setBacktestProgress(data.strategy_id as string, 0)
+        return
+      }
+      if (eventType === 'backtest.progress') {
+        setBacktestProgress(data.strategy_id as string, data.percent as number)
         return
       }
       if (eventType === 'backtest.completed') {

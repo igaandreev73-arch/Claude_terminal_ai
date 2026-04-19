@@ -142,6 +142,8 @@ interface Store {
   // Running flags (keyed by strategy_id)
   backtestRunning: Record<string, boolean>
   setBacktestRunning: (strategyId: string, v: boolean) => void
+  backtestProgress: Record<string, number>
+  setBacktestProgress: (strategyId: string, pct: number) => void
   optimizerRunning: Record<string, boolean>
   setOptimizerRunning: (strategyId: string, v: boolean) => void
 }
@@ -237,6 +239,8 @@ export const useStore = create<Store>()(persist((set) => ({
   setOptimizerResult: (key, r) => set((s) => ({ optimizerResults: { ...s.optimizerResults, [key]: r } })),
   backtestRunning: {},
   setBacktestRunning: (id, v) => set((s) => ({ backtestRunning: { ...s.backtestRunning, [id]: v } })),
+  backtestProgress: {},
+  setBacktestProgress: (id, pct) => set((s) => ({ backtestProgress: { ...s.backtestProgress, [id]: pct } })),
   optimizerRunning: {},
   setOptimizerRunning: (id, v) => set((s) => ({ optimizerRunning: { ...s.optimizerRunning, [id]: v } })),
 }), {

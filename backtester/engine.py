@@ -10,7 +10,7 @@ Design:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Callable, Literal
 
 from backtester.metrics import compute_metrics
 from core.logger import get_logger
@@ -67,6 +67,7 @@ class BacktestEngine:
         config: BacktestConfig | None = None,
         symbol: str = "",
         timeframe: str = "",
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> BacktestResult:
         config = config or BacktestConfig()
         strategy.reset()
@@ -82,8 +83,12 @@ class BacktestEngine:
         result.equity_curve.append(capital)
 
         position: _Position | None = None
+        total = len(candles)
+        report_every = max(1, total // 20)  # ~20 обновлений прогресса
 
-        for candle in candles:
+        for idx, candle in enumerate(candles):
+            if on_progress and idx % report_every == 0:
+                on_progress(idx, total)
             if position is not None:
                 # Check SL/TP hit on this bar
                 closed = position.check_exit(candle)
