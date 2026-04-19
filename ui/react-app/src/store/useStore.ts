@@ -2,6 +2,35 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
+export interface BacktestResultUI {
+  id: string
+  strategy_id: string
+  symbol: string
+  timeframe: string
+  params: Record<string, unknown>
+  metrics: Record<string, number | null>
+  equity_curve: number[]
+  trades_count: number
+  period_start?: number
+  period_end?: number
+  is_optimization?: boolean
+  created_at: number
+}
+
+export interface OptimizerResultUI {
+  run_id: string
+  strategy_id: string
+  symbol: string
+  timeframe: string
+  target_metric: string
+  best_params: Record<string, unknown>
+  best_metric: number
+  best_equity_curve: number[]
+  all_results: Array<{ params: Record<string, unknown>; metrics: Record<string, number | null>; trades_count: number }>
+  fingerprint: Record<string, unknown>
+  created_at: number
+}
+
 export interface TaskInfo {
   task_id: string
   type: string       // 'backfill' | 'validation'
@@ -103,6 +132,18 @@ interface Store {
   upsertTask: (t: TaskInfo) => void
   removeTask: (task_id: string) => void
   clearCompletedTasks: () => void
+
+  // Backtest / Optimizer results (keyed by `strategyId:symbol:timeframe`)
+  backtestResults: Record<string, BacktestResultUI>
+  setBacktestResult: (key: string, r: BacktestResultUI) => void
+  // Optimizer results (keyed by `strategyId:symbol`)
+  optimizerResults: Record<string, OptimizerResultUI>
+  setOptimizerResult: (key: string, r: OptimizerResultUI) => void
+  // Running flags (keyed by strategy_id)
+  backtestRunning: Record<string, boolean>
+  setBacktestRunning: (strategyId: string, v: boolean) => void
+  optimizerRunning: Record<string, boolean>
+  setOptimizerRunning: (strategyId: string, v: boolean) => void
 }
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -189,6 +230,15 @@ export const useStore = create<Store>()(persist((set) => ({
     set((s) => ({ tasks: s.tasks.filter((t) => t.task_id !== task_id) })),
   clearCompletedTasks: () =>
     set((s) => ({ tasks: s.tasks.filter((t) => t.status === 'running' || t.status === 'paused') })),
+
+  backtestResults: {},
+  setBacktestResult: (key, r) => set((s) => ({ backtestResults: { ...s.backtestResults, [key]: r } })),
+  optimizerResults: {},
+  setOptimizerResult: (key, r) => set((s) => ({ optimizerResults: { ...s.optimizerResults, [key]: r } })),
+  backtestRunning: {},
+  setBacktestRunning: (id, v) => set((s) => ({ backtestRunning: { ...s.backtestRunning, [id]: v } })),
+  optimizerRunning: {},
+  setOptimizerRunning: (id, v) => set((s) => ({ optimizerRunning: { ...s.optimizerRunning, [id]: v } })),
 }), {
   name: 'terminal-ui',
   partialize: (state) => ({

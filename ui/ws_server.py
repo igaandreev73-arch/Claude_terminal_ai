@@ -65,6 +65,8 @@ BROADCAST_EVENTS = {
     "demo.trade.opened", "demo.trade.closed", "demo.stats.updated",
     "backfill.progress", "backfill.complete", "backfill.error",
     "validation.result",
+    "backtest.started", "backtest.completed", "backtest.error",
+    "optimizer.started", "optimizer.completed", "optimizer.error",
     "HEALTH_UPDATE",
 }
 
@@ -226,6 +228,15 @@ class WSServer:
             limit  = int(payload.get("limit", 500))
             await self._send_candles(ws, symbol, tf, limit)
 
+        elif command == "run_backtest":
+            await self._handle_run_backtest(ws, payload)
+
+        elif command == "run_optimizer":
+            await self._handle_run_optimizer(ws, payload)
+
+        elif command == "get_backtest_results":
+            await self._handle_get_backtest_results(ws, payload)
+
     async def _handle_start_backfill(self, ws: WebSocketResponse, payload: dict) -> None:
         from data.backfill import run_manual_backfill
         symbol  = payload.get("symbol", "BTC/USDT")
@@ -378,6 +389,232 @@ class WSServer:
             "running": running_clean,
             "paused": paused,
             "recent": recent,
+        })
+
+    # ── Backtest / Optimizer ──────────────────────────────────────────────────
+
+    def _strategy_registry(self) -> dict:
+        from strategies.simple_ma_strategy import SimpleMAStrategy
+        return {"ma-crossover": SimpleMAStrategy}
+
+    async def _handle_run_backtest(self, ws: WebSocketResponse, payload: dict) -> None:
+        strategy_id = payload.get("strategy_id", "")
+        symbol      = payload.get("symbol", "BTC/USDT")
+        timeframe   = payload.get("timeframe", "1h")
+        params      = payload.get("params", {})
+
+        registry = self._strategy_registry()
+        if strategy_id not in registry:
+            await self._broadcast_event("backtest.error", {
+                "strategy_id": strategy_id,
+                "error": f"Стратегия '{strategy_id}' не поддерживает бэктест",
+            })
+            return
+        if not self._candles_repo:
+            await self._broadcast_event("backtest.error", {
+                "strategy_id": strategy_id, "error": "Репозиторий свечей недоступен",
+            })
+            return
+
+        run_id = f"bt-{strategy_id}-{symbol.replace('/', '')}-{int(time.time())}"
+        await self._broadcast_event("backtest.started", {
+            "run_id": run_id, "strategy_id": strategy_id,
+            "symbol": symbol, "timeframe": timeframe,
+        })
+        asyncio.create_task(
+            self._run_backtest_task(run_id, strategy_id, symbol, timeframe, params, registry)
+        )
+
+    async def _run_backtest_task(
+        self, run_id: str, strategy_id: str, symbol: str, timeframe: str,
+        params: dict, registry: dict,
+    ) -> None:
+        try:
+            candles = await self._candles_repo.get_latest(symbol, timeframe, limit=500_000)
+            if not candles:
+                await self._broadcast_event("backtest.error", {
+                    "run_id": run_id, "strategy_id": strategy_id,
+                    "error": f"Нет данных для {symbol}/{timeframe}",
+                })
+                return
+
+            candles_data = [
+                {"open_time": c.open_time, "open": c.open, "high": c.high,
+                 "low": c.low, "close": c.close, "volume": c.volume}
+                for c in candles
+            ]
+
+            from backtester.engine import BacktestConfig, BacktestEngine
+            strategy = registry[strategy_id](params=params or {})
+            engine = BacktestEngine()
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: engine.run(strategy, candles_data, BacktestConfig(), symbol, timeframe),
+            )
+
+            eq = result.equity_curve
+            if len(eq) > 500:
+                step = len(eq) / 500
+                eq = [eq[int(i * step)] for i in range(500)] + [eq[-1]]
+
+            result_data = {
+                "id": run_id,
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "period_start": candles[0].open_time,
+                "period_end": candles[-1].open_time,
+                "params": params,
+                "metrics": result.metrics,
+                "equity_curve": eq,
+                "trades_count": len(result.trades),
+                "is_optimization": False,
+                "created_at": int(time.time()),
+            }
+
+            from storage.repositories.backtest_repo import BacktestRepository
+            await BacktestRepository().save(result_data)
+            await self._broadcast_event("backtest.completed", result_data)
+            log.info(f"Бэктест {strategy_id} {symbol}/{timeframe}: {len(result.trades)} сделок")
+
+        except Exception as e:
+            log.error(f"Ошибка бэктеста {strategy_id}: {e}")
+            await self._broadcast_event("backtest.error", {
+                "run_id": run_id, "strategy_id": strategy_id, "error": str(e),
+            })
+
+    async def _handle_run_optimizer(self, ws: WebSocketResponse, payload: dict) -> None:
+        strategy_id   = payload.get("strategy_id", "")
+        symbol        = payload.get("symbol", "BTC/USDT")
+        timeframe     = payload.get("timeframe", "1h")
+        param_grid    = payload.get("param_grid", {})
+        target_metric = payload.get("target_metric", "sharpe_ratio")
+        walk_forward  = bool(payload.get("walk_forward", True))
+
+        registry = self._strategy_registry()
+        if strategy_id not in registry:
+            await self._broadcast_event("optimizer.error", {
+                "strategy_id": strategy_id, "error": "Стратегия не поддерживает оптимизацию",
+            })
+            return
+        if not self._candles_repo:
+            await self._broadcast_event("optimizer.error", {
+                "strategy_id": strategy_id, "error": "Репозиторий свечей недоступен",
+            })
+            return
+
+        run_id = f"opt-{strategy_id}-{symbol.replace('/', '')}-{int(time.time())}"
+        await self._broadcast_event("optimizer.started", {
+            "run_id": run_id, "strategy_id": strategy_id,
+            "symbol": symbol, "timeframe": timeframe,
+        })
+        asyncio.create_task(
+            self._run_optimizer_task(
+                run_id, strategy_id, symbol, timeframe,
+                param_grid, target_metric, walk_forward, registry,
+            )
+        )
+
+    async def _run_optimizer_task(
+        self, run_id: str, strategy_id: str, symbol: str, timeframe: str,
+        param_grid: dict, target_metric: str, walk_forward: bool, registry: dict,
+    ) -> None:
+        try:
+            candles = await self._candles_repo.get_latest(symbol, timeframe, limit=500_000)
+            if not candles:
+                await self._broadcast_event("optimizer.error", {
+                    "run_id": run_id, "strategy_id": strategy_id,
+                    "error": f"Нет данных для {symbol}/{timeframe}",
+                })
+                return
+
+            candles_data = [
+                {"open_time": c.open_time, "open": c.open, "high": c.high,
+                 "low": c.low, "close": c.close, "volume": c.volume}
+                for c in candles
+            ]
+
+            from backtester.engine import BacktestConfig
+            from backtester.optimizer import GridSearchOptimizer, OptimizeConfig
+            strategy_cls = registry[strategy_id]
+            opt_config = OptimizeConfig(
+                param_grid=param_grid,
+                backtest_config=BacktestConfig(),
+                target_metric=target_metric,
+                walk_forward=walk_forward,
+            )
+            optimizer = GridSearchOptimizer()
+            loop = asyncio.get_event_loop()
+            opt_result = await loop.run_in_executor(
+                None,
+                lambda: optimizer.run(strategy_cls, candles_data, opt_config, symbol, timeframe),
+            )
+
+            top_results = [
+                {"params": p, "metrics": r.metrics, "trades_count": len(r.trades)}
+                for p, r in opt_result.all_results[:20]
+            ]
+
+            eq = opt_result.best_result.equity_curve
+            if len(eq) > 300:
+                step = len(eq) / 300
+                eq = [eq[int(i * step)] for i in range(300)] + [eq[-1]]
+
+            result_data = {
+                "run_id": run_id,
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "target_metric": target_metric,
+                "best_params": opt_result.best_params,
+                "best_metric": opt_result.best_metric,
+                "best_equity_curve": eq,
+                "all_results": top_results,
+                "fingerprint": opt_result.fingerprint.data,
+                "created_at": int(time.time()),
+            }
+
+            from storage.repositories.backtest_repo import BacktestRepository
+            await BacktestRepository().save({
+                "id": run_id,
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "period_start": candles[0].open_time,
+                "period_end": candles[-1].open_time,
+                "params": opt_result.best_params,
+                "metrics": opt_result.best_result.metrics,
+                "equity_curve": eq,
+                "trades_count": len(opt_result.best_result.trades),
+                "is_optimization": True,
+                "created_at": int(time.time()),
+            })
+            await self._broadcast_event("optimizer.completed", result_data)
+            log.info(f"Оптимизация {strategy_id} {symbol}: лучшие {opt_result.best_params}")
+
+        except Exception as e:
+            log.error(f"Ошибка оптимизации {strategy_id}: {e}")
+            await self._broadcast_event("optimizer.error", {
+                "run_id": run_id, "strategy_id": strategy_id, "error": str(e),
+            })
+
+    async def _handle_get_backtest_results(self, ws: WebSocketResponse, payload: dict) -> None:
+        strategy_id = payload.get("strategy_id", "")
+        from storage.repositories.backtest_repo import BacktestRepository
+        results = await BacktestRepository().list_for_strategy(strategy_id)
+        await self._send(ws, {
+            "type": "backtest_results",
+            "strategy_id": strategy_id,
+            "results": results,
+        })
+
+    async def _broadcast_event(self, event_type: str, data: dict) -> None:
+        await self._broadcast({
+            "type": "event",
+            "event_type": event_type,
+            "data": _serialise(data),
+            "ts": datetime.now(timezone.utc).isoformat(),
         })
 
     async def _handle_run_validation(self, ws: WebSocketResponse, payload: dict) -> None:

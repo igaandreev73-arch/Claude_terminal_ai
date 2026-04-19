@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store/useStore'
-import type { TaskInfo } from '../store/useStore'
+import type { BacktestResultUI, OptimizerResultUI, TaskInfo } from '../store/useStore'
 import type { BusEvent, Candle, Position, Signal, TradeRecord } from '../types'
 
 const WS_URL = 'ws://localhost:8765/ws'
@@ -17,6 +17,8 @@ export function useWebSocket() {
     pushEvent, pushCandle, pushTrade, setDemoStats, setDbStats,
     addNotification, updateNotification,
     upsertTask,
+    setBacktestResult, setOptimizerResult,
+    setBacktestRunning, setOptimizerRunning,
   } = useStore()
 
   // taskId → notificationId (для обновления прогресс-уведомлений)
@@ -102,6 +104,13 @@ export function useWebSocket() {
     }
 
     if (type === 'pong') return
+
+    if (type === 'backtest_results') {
+      for (const r of (msg.results ?? []) as BacktestResultUI[]) {
+        setBacktestResult(`${r.strategy_id}:${r.symbol}:${r.timeframe}`, r)
+      }
+      return
+    }
 
     if (type === 'db_stats') {
       setDbStats(msg as any)
@@ -207,6 +216,37 @@ export function useWebSocket() {
         })
         return
       }
+      if (eventType === 'backtest.started') {
+        setBacktestRunning(data.strategy_id as string, true)
+        return
+      }
+      if (eventType === 'backtest.completed') {
+        const r = data as unknown as BacktestResultUI
+        setBacktestResult(`${r.strategy_id}:${r.symbol}:${r.timeframe}`, r)
+        setBacktestRunning(r.strategy_id, false)
+        return
+      }
+      if (eventType === 'backtest.error') {
+        setBacktestRunning(data.strategy_id as string, false)
+        addNotification({ type: 'error', title: 'Ошибка бэктеста', message: data.error as string })
+        return
+      }
+      if (eventType === 'optimizer.started') {
+        setOptimizerRunning(data.strategy_id as string, true)
+        return
+      }
+      if (eventType === 'optimizer.completed') {
+        const r = data as unknown as OptimizerResultUI
+        setOptimizerResult(`${r.strategy_id}:${r.symbol}`, r)
+        setOptimizerRunning(r.strategy_id, false)
+        return
+      }
+      if (eventType === 'optimizer.error') {
+        setOptimizerRunning(data.strategy_id as string, false)
+        addNotification({ type: 'error', title: 'Ошибка оптимизации', message: data.error as string })
+        return
+      }
+
       if (eventType === 'validation.result') {
         const taskId = data.task_id as string
         const symbol = data.symbol  as string
@@ -314,6 +354,18 @@ export function useWebSocket() {
     send({ type: 'command', command: 'run_validation', payload: { symbol, mode } })
   }
 
+  function runBacktest(strategyId: string, symbol: string, timeframe: string, params: Record<string, number>) {
+    send({ type: 'command', command: 'run_backtest', payload: { strategy_id: strategyId, symbol, timeframe, params } })
+  }
+
+  function runOptimizer(strategyId: string, symbol: string, timeframe: string, paramGrid: Record<string, number[]>, targetMetric: string, walkForward: boolean) {
+    send({ type: 'command', command: 'run_optimizer', payload: { strategy_id: strategyId, symbol, timeframe, param_grid: paramGrid, target_metric: targetMetric, walk_forward: walkForward } })
+  }
+
+  function getBacktestResults(strategyId: string) {
+    send({ type: 'command', command: 'get_backtest_results', payload: { strategy_id: strategyId } })
+  }
+
   useEffect(() => {
     connect()
     return () => {
@@ -322,5 +374,5 @@ export function useWebSocket() {
     }
   }, [])
 
-  return { send, startBackfill, stopTask, resumeTask, runValidation }
+  return { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults }
 }

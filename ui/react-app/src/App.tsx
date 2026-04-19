@@ -11,7 +11,7 @@ import StrategiesView     from './components/StrategiesView'
 
 export default function App() {
   const { activeTab } = useStore()
-  const { send, startBackfill, stopTask, resumeTask, runValidation } = useWebSocket()
+  const { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults } = useWebSocket()
 
   function openPosition(params: {
     symbol: string; direction: 'bull' | 'bear'
@@ -31,7 +31,13 @@ export default function App() {
           <TradePanel onOpenPosition={openPosition} />
         )}
         {activeTab === 'analytics'   && <Analytics />}
-        {activeTab === 'strategies'  && <StrategiesView />}
+        {activeTab === 'strategies'  && (
+          <StrategiesView
+            runBacktest={runBacktest}
+            runOptimizer={runOptimizer}
+            getBacktestResults={getBacktestResults}
+          />
+        )}
         {activeTab === 'data'        && (
           <DataView
             onRequestStats={() => send({ type: 'command', command: 'get_db_stats', payload: {} })}

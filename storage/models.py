@@ -172,3 +172,24 @@ class TaskModel(Base):
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class BacktestResultModel(Base):
+    __tablename__ = "backtest_results"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    strategy_id: Mapped[str] = mapped_column(Text, nullable=False)
+    symbol: Mapped[str] = mapped_column(Text, nullable=False)
+    timeframe: Mapped[str] = mapped_column(Text, nullable=False)
+    period_start: Mapped[int | None] = mapped_column(Integer)
+    period_end: Mapped[int | None] = mapped_column(Integer)
+    params: Mapped[str] = mapped_column(Text, nullable=False)        # JSON
+    metrics: Mapped[str] = mapped_column(Text, nullable=False)       # JSON
+    equity_curve: Mapped[str] = mapped_column(Text, nullable=False)  # JSON
+    trades_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_optimization: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer)
+
+    __table_args__ = (
+        Index("idx_backtest_strategy", "strategy_id", "symbol", "timeframe"),
+    )
