@@ -26,7 +26,7 @@ TF       = "1m"
 WINDOW   = 50      # свечей в каждом окне для сравнения
 WINDOWS  = 3       # кол-во случайных окон на пару
 VOL_TOL  = 0.001   # 0.1% допуск на volume
-PRICE_TOL = 1e-8   # допуск на цену (float-арифметика)
+PRICE_TOL = 0.001  # 0.1% — BingX REST pipeline может дообрабатывать недавние свечи
 
 
 def fmt_sym(s: str) -> str:

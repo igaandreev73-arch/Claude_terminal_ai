@@ -151,7 +151,7 @@ async def repair_integrity(symbols: list[str], repo: CandlesRepository) -> None:
 
 # ── Обновление свежих свечей из REST (исправляет WS-артефакты) ───────────────
 
-REFRESH_MINUTES = 120   # последние N минут перезаписываем из REST при каждом старте
+REFRESH_PAGES = 2       # кол-во страниц по MAX_PER_REQUEST (2 × 1440 = 48 часов)
 
 
 async def refresh_recent(
@@ -160,30 +160,41 @@ async def refresh_recent(
     repo: CandlesRepository,
 ) -> None:
     """
-    Перезаписывает последние REFRESH_MINUTES минут 1m-свечей из REST API
-    и пересчитывает агрегаты для этого диапазона.
+    Перезаписывает последние 48 часов 1m-свечей из REST API и пересчитывает агрегаты.
 
     Зачем: live WS-свечи снимаются в момент детектирования закрытия (по смене
     open_time следующего тика) — биржа ещё может дообрабатывать последние сделки,
     поэтому volume и цена WS-свечей немного отличаются от финальных REST-значений.
+    Два запроса по 1440 свечей = полное покрытие за 48 часов.
     """
-    log.info(f"Обновление последних {REFRESH_MINUTES} мин свечей из REST...")
+    page_ms = MAX_PER_REQUEST * 60 * 1000  # 1440 минут в мс
+    log.info(f"Обновление последних {REFRESH_PAGES * MAX_PER_REQUEST} мин свечей из REST...")
     for symbol in symbols:
         try:
-            candles = await rest_client.fetch_klines(
-                symbol, "1m", limit=REFRESH_MINUTES
-            )
-            if not candles:
-                continue
-            await repo.upsert_many(candles)
+            now_ms = int(time.time() * 1000)
+            all_candles: list[Candle] = []
+            end_ms = now_ms
+            for _ in range(REFRESH_PAGES):
+                start_ms = end_ms - page_ms
+                chunk = await rest_client.fetch_klines(
+                    symbol, "1m", limit=MAX_PER_REQUEST,
+                    start_time=start_ms, end_time=end_ms,
+                )
+                if chunk:
+                    all_candles.extend(chunk)
+                end_ms = start_ms
+                await asyncio.sleep(REQUEST_SLEEP)
 
-            # Пересчитываем агрегаты только для обновлённого диапазона
+            if not all_candles:
+                continue
+            await repo.upsert_many(all_candles)
+
             for tf, tf_min in AGG_TFS.items():
-                agg = _aggregate_1m(candles, tf, tf_min)
+                agg = _aggregate_1m(all_candles, tf, tf_min)
                 if agg:
                     await repo.upsert_many(agg)
 
-            log.info(f"{symbol}: обновлено {len(candles)} 1m-свечей + агрегаты")
+            log.info(f"{symbol}: обновлено {len(all_candles)} 1m-свечей + агрегаты")
             await asyncio.sleep(0.3)
         except Exception as e:
             log.error(f"Ошибка обновления {symbol}: {e}")
