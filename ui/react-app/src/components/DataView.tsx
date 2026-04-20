@@ -898,7 +898,10 @@ export default function DataView({ onRequestStats, startBackfill, runValidation 
   const [subTab,   setSubTab]   = useState<'data' | 'testing'>('data')
 
   useEffect(() => {
-    if (connected) onRequestStats()
+    if (!connected) return
+    onRequestStats()
+    const timer = setInterval(onRequestStats, 30_000)
+    return () => clearInterval(timer)
   }, [connected])
 
   const totalCandles  = dbStats?.candles.reduce((s, r) => s + r.count, 0) ?? 0

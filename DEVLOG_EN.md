@@ -38,6 +38,82 @@ Next step: ...
 
 ## Entries
 
+### [2026-04-20] Step 1 — Data Foundation: futures WS, Watchdog, verifier, Pulse tab
+
+**Done:**
+
+**DB Schema (`storage/models.py`, `storage/database.py`):**
+- `CandleModel`: added `market_type TEXT DEFAULT 'spot'` and `data_trust_score INTEGER DEFAULT 100`
+- Unique index `uq_candles` extended to `(symbol, timeframe, open_time, market_type)` — spot and futures stored separately in same table
+- `market_type` added to `TradeRawModel`, `OrderBookSnapshotModel`, `MarketSnapshotModel`; `basis` to `MarketSnapshotModel`
+- 5 new tables: `FuturesMetricsModel` (OI/Funding/basis), `LiquidationModel` (non-recoverable), `DataVerificationLogModel`, `DataGapModel`, `StorageStatsModel`
+- Migrations via `ALTER TABLE ... ADD COLUMN` with `try/except` — backward-compatible; index recreated using `PRAGMA index_info`
+
+**Futures WebSocket (`data/bingx_futures_ws.py`):**
+- Independent class `BingXFuturesWebSocket`: subscribes to `@kline_1min`, `@depth20`, `@trade`, `@forceOrder` (liquidations)
+- Publishes `futures.candle.1m.closed`, `futures.orderbook.update`, `futures.trade.raw`, `futures.liquidation`
+- Own reconnect loop, gzip decompression, updates Watchdog on every message
+- Liquidations written to `LiquidationModel` — non-recoverable, WebSocket only
+
+**Basis Calculator (`data/basis_calculator.py`):**
+- Listens to `candle.1m.closed` (spot) and `futures.candle.1m.closed` (futures)
+- When both prices available: publishes `futures.basis.updated` and writes to `FuturesMetricsModel`
+- Public `last_basis: dict[str, dict]` cache — read by `get_pulse_state`
+
+**Watchdog (`data/watchdog.py`):**
+- 4 escalation stages: `NORMAL → DEGRADED → LOST → DEAD`
+- 3 diagnostic levels: silence counter (5s/30s thresholds), price drift vs REST (0.5% tolerance), reconnect exhaustion
+- Exponential backoff: `BACKOFF_BASE × 2^n`, max 10 attempts
+- On critical connection degradation (futures WS): immediately writes `DataGapModel(recoverable=False)` to DB
+- Publishes `watchdog.degraded/lost/dead/recovered/reconnecting`
+
+**Data Verifier (`data/data_verifier.py`):**
+- 4 verification levels: completeness (gap detection), OHLCV accuracy (REST cross-check, 0.01% tolerance), aggregation correctness (1h exchange vs local), continuity (3×ATR spike check)
+- Updates `CandleModel.data_trust_score` via batch UPDATE in DB
+- Public `get_trust_scores() -> dict[str, int]` — read by Pulse tab
+
+**Pulse Tab UI (`ui/react-app/src/components/PulseView.tsx`):**
+- 6 blocks: Connections (status dots + rate-limit bar), Modules (table), Task Queue, Critical Events, Data Status (DB size + basis + trust scores), Event Stream
+- New store types in `useStore.ts`: `ConnectionStatus`, `ModuleStatus`, `RateLimitStatus`, `DataTrustRow`, `BasisRow`, `PulseState`, `CriticalEvent`
+- «Pulse» tab added to `TopBar.tsx` navigation
+
+**WebSocket server (`ui/ws_server.py`):**
+- New command `get_pulse_state`: aggregates data from Watchdog, BasisCalculator, DataVerifier, calculates DB size
+- `watchdog.*` and `futures.*` events added to `BROADCAST_EVENTS`
+- Optional constructor params `watchdog`, `basis_calculator`, `data_verifier`
+
+**main.py:**
+- Wired: `BingXFuturesWebSocket`, `BasisCalculator`, `Watchdog`, `DataVerifier`
+- Watchdog registers both WS connections (spot_ws non-critical, futures_ws critical)
+- Futures candles subscribed to DB persistence
+
+**Bug fixes:**
+- `useWebSocket.ts`: `backtestResults` key fixed to `r.id` (in two places) — history no longer overwritten on repeated runs of same pair/timeframe
+- `useWebSocket.ts`: `watchdog.*` events → `pushCriticalEvent`; `pulse_state` message → `setPulseState`
+- Optimizer: `optimizer.error` now forcibly resets `localRunning` via `false → true → false` state toggle — fixes "Sending..." button stuck forever
+
+**Decisions:**
+- Futures WS as separate class (not subclass of BingXWebSocket): different data formats, different endpoints, independent reconnect loop
+- Liquidations WebSocket-only: BingX REST history unavailable → stored without aggregation, gaps recorded in `data_gaps` with `recoverable=False`
+- `market_type` in unique index: spot and futures of same symbol coexist in one table, separated at index level — query without `market_type` returns both markets intentionally
+- Pulse state is pull-based (client requests on button click), not push: data is stable, no point streaming it every second
+
+**Postponed:**
+- Futures REST poller (OI, Funding Rate, Long/Short Ratio) — in Step 1 checklist, implemented separately
+- Three-temperature storage (hot/warm/cold) and cold data aggregation — Step 1 §6
+- Smart verification scheduling — `DataVerifier` implements 4 levels, scheduling added later
+
+Tests:
+  Unit:        —
+  Integration: —
+  Smoke:       ⏳
+  Coverage:    n/a
+
+Commit: `—`
+Next step: Futures REST poller (OI/Funding/L-S Ratio) → complete Step 1 checklist
+
+---
+
 ### [2026-04-19] Data integrity: backfill, TF aggregation, WAL, auto-repair, logs, cross-validation
 
 **Done:**

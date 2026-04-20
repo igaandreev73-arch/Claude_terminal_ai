@@ -2,6 +2,88 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
+// ── Pulse types ────────────────────────────────────────────────────────────────
+
+export interface ConnectionStatus {
+  name: string
+  label: string
+  stage: 'normal' | 'degraded' | 'lost' | 'dead' | 'stopped'
+  last_ok_at: number | null    // unix timestamp
+  is_critical: boolean
+  market_type: string
+  silence_sec?: number
+}
+
+export interface ModuleStatus {
+  name: string
+  label: string
+  status: 'ok' | 'slow' | 'degraded' | 'frozen' | 'stopped'
+  last_action_at: number | null
+  events_per_min: number
+  latency_ms: number | null
+}
+
+export interface RateLimitStatus {
+  used: number
+  limit: number
+  pct: number        // 0–100
+  priority: string   // NORMAL / HIGH / CRITICAL
+}
+
+export interface DataTrustRow {
+  symbol: string
+  timeframe: string
+  market_type: string
+  last_candle_at: number | null
+  gaps_24h: number
+  verification_status: string
+  trust_score: number
+  size_mb: number
+}
+
+export interface BasisRow {
+  symbol: string
+  spot: number
+  futures: number
+  basis: number
+  basis_pct: number
+  updated_at: number
+}
+
+export interface PulseState {
+  connections: ConnectionStatus[]
+  modules: ModuleStatus[]
+  rate_limit: RateLimitStatus
+  data_rows: DataTrustRow[]
+  basis: BasisRow[]
+  db_size_mb: number
+  db_growth_mb_7d: number
+  db_forecast_days: number | null
+  last_aggregation_at: number | null
+  updated_at: number
+}
+
+export interface CriticalEvent {
+  id: string
+  level: 'warning' | 'error' | 'critical'
+  module: string
+  message: string
+  started_at: number
+  seen: boolean
+}
+
+export interface TradeDetail {
+  entry_time: number
+  exit_time: number
+  direction: 'long' | 'short'
+  entry_price: number
+  exit_price: number
+  size_usd: number
+  pnl: number
+  pnl_pct: number
+  closed_by: 'sl' | 'tp' | 'signal' | 'end'
+}
+
 export interface BacktestResultUI {
   id: string
   strategy_id: string
@@ -11,6 +93,7 @@ export interface BacktestResultUI {
   metrics: Record<string, number | null>
   equity_curve: number[]
   trades_count: number
+  trades_detail?: TradeDetail[]
   period_start?: number
   period_end?: number
   is_optimization?: boolean
@@ -133,7 +216,7 @@ interface Store {
   removeTask: (task_id: string) => void
   clearCompletedTasks: () => void
 
-  // Backtest / Optimizer results (keyed by `strategyId:symbol:timeframe`)
+  // Backtest / Optimizer results (keyed by result.id)
   backtestResults: Record<string, BacktestResultUI>
   setBacktestResult: (key: string, r: BacktestResultUI) => void
   // Optimizer results (keyed by `strategyId:symbol`)
@@ -146,6 +229,13 @@ interface Store {
   setBacktestProgress: (strategyId: string, pct: number) => void
   optimizerRunning: Record<string, boolean>
   setOptimizerRunning: (strategyId: string, v: boolean) => void
+
+  // ── Pulse tab ──────────────────────────────────────────────────────────────
+  pulseState: PulseState | null
+  setPulseState: (s: PulseState) => void
+  criticalEvents: CriticalEvent[]
+  pushCriticalEvent: (e: CriticalEvent) => void
+  markCriticalEventSeen: (id: string) => void
 }
 
 export const useStore = create<Store>()(persist((set) => ({
@@ -243,6 +333,18 @@ export const useStore = create<Store>()(persist((set) => ({
   setBacktestProgress: (id, pct) => set((s) => ({ backtestProgress: { ...s.backtestProgress, [id]: pct } })),
   optimizerRunning: {},
   setOptimizerRunning: (id, v) => set((s) => ({ optimizerRunning: { ...s.optimizerRunning, [id]: v } })),
+
+  pulseState: null,
+  setPulseState: (s) => set({ pulseState: s }),
+  criticalEvents: [],
+  pushCriticalEvent: (e) =>
+    set((s) => ({
+      criticalEvents: [e, ...s.criticalEvents.filter(x => x.id !== e.id)].slice(0, 200),
+    })),
+  markCriticalEventSeen: (id) =>
+    set((s) => ({
+      criticalEvents: s.criticalEvents.map(e => e.id === id ? { ...e, seen: true } : e),
+    })),
 }), {
   name: 'terminal-ui',
   partialize: (state) => ({

@@ -14,11 +14,15 @@ from analytics.mtf_confluence import MTFConfluenceEngine
 from analytics.smartmoney import SmartMoneyEngine
 from analytics.ta_engine import TAEngine
 from analytics.volume_engine import VolumeEngine
+from data.basis_calculator import BasisCalculator
+from data.bingx_futures_ws import BingXFuturesWebSocket
 from data.bingx_rest import BingXRestClient
 from data.bingx_ws import BingXWebSocket
+from data.data_verifier import DataVerifier
 from data.ob_processor import OBProcessor
 from data.rate_limit_guard import RateLimitGuard
 from data.tf_aggregator import TFAggregator
+from data.watchdog import Watchdog
 from execution.bingx_private import BingXPrivateClient
 from execution.execution_engine import ExecutionEngine, ExecutionMode
 from execution.risk_guard import RiskConfig, RiskGuard
@@ -70,8 +74,12 @@ async def main() -> None:
     rate_guard = RateLimitGuard()
     rest_client = BingXRestClient(event_bus, rate_guard)
     ws_client = BingXWebSocket(event_bus, symbols)
+    futures_ws = BingXFuturesWebSocket(event_bus, symbols)
     tf_aggregator = TFAggregator(event_bus)
     ob_processor = OBProcessor(event_bus)
+    watchdog = Watchdog(event_bus, rest_client)
+    basis_calculator = BasisCalculator(event_bus)
+    data_verifier = DataVerifier(event_bus)
     ob_repo = OrderBookRepository()
     ta_engine = TAEngine(event_bus)
     smc_engine = SmartMoneyEngine(event_bus)
@@ -94,6 +102,9 @@ async def main() -> None:
         event_bus, signal_engine, execution_engine,
         rest_client=rest_client,
         candles_repo=candles_repo,
+        watchdog=watchdog,
+        basis_calculator=basis_calculator,
+        data_verifier=data_verifier,
         host=os.getenv("WS_HOST", "localhost"),
         port=int(os.getenv("WS_PORT", "8765")),
     )
@@ -106,6 +117,22 @@ async def main() -> None:
                          ["3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"]]
     for event_type in all_candle_events:
         event_bus.subscribe(event_type, lambda e, r=candles_repo: _on_candle_closed(e, r))
+
+    # --- Futures свечи → БД ---
+    futures_candle_events = ["futures.candle.1m.closed"] + [f"futures.candle.{tf}.closed" for tf in
+                              ["3m", "5m", "15m", "30m", "1h", "4h", "1d"]]
+    for event_type in futures_candle_events:
+        event_bus.subscribe(event_type, lambda e, r=candles_repo: _on_candle_closed(e, r))
+
+    # --- Watchdog: регистрируем оба WS-соединения ---
+    watchdog.register(
+        "spot_ws", market_type="spot", is_critical=False,
+        reconnect_fn=lambda: ws_client.start(),
+    )
+    watchdog.register(
+        "futures_ws", market_type="futures", is_critical=True,
+        reconnect_fn=lambda: futures_ws.start(),
+    )
 
     # --- Старт ---
     await event_bus.start()
@@ -124,6 +151,9 @@ async def main() -> None:
     await execution_engine.start()
     await ws_server.start()
     await ws_client.start()
+    await futures_ws.start()
+    await basis_calculator.start()
+    asyncio.create_task(watchdog.start())
 
     # Проверка целостности → обновление свежих WS-свечей → бэкфилл (в фоне)
     async def _startup_data():
@@ -150,6 +180,9 @@ async def main() -> None:
     await stop_event.wait()
 
     log.info("Получен сигнал остановки...")
+    await watchdog.stop()
+    await futures_ws.stop()
+    await basis_calculator.stop()
     await ws_client.stop()
     await ws_server.stop()
     await execution_engine.stop()

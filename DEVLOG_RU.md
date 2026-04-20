@@ -38,6 +38,82 @@
 
 ## Записи
 
+### [2026-04-20] Step 1 — Фундамент данных: фьючерсный WS, Watchdog, верификация, Пульс
+
+**Что сделано:**
+
+**Схема БД (`storage/models.py`, `storage/database.py`):**
+- `CandleModel`: добавлено поле `market_type TEXT DEFAULT 'spot'` и `data_trust_score INTEGER DEFAULT 100`
+- Уникальный индекс `uq_candles` расширен: теперь `(symbol, timeframe, open_time, market_type)` — спот и фьючерс хранятся раздельно
+- Добавлен `market_type` к `TradeRawModel`, `OrderBookSnapshotModel`, `MarketSnapshotModel`; `basis` к `MarketSnapshotModel`
+- 5 новых таблиц: `FuturesMetricsModel` (OI/Funding/базис), `LiquidationModel` (невосстанавливаемые), `DataVerificationLogModel`, `DataGapModel`, `StorageStatsModel`
+- Миграции через `ALTER TABLE ... ADD COLUMN` с `try/except` — совместимость с существующей БД; индекс пересоздаётся через `PRAGMA index_info`
+
+**Фьючерсный WebSocket (`data/bingx_futures_ws.py`):**
+- Независимый класс `BingXFuturesWebSocket`: подписки `@kline_1min`, `@depth20`, `@trade`, `@forceOrder` (ликвидации)
+- Публикует `futures.candle.1m.closed`, `futures.orderbook.update`, `futures.trade.raw`, `futures.liquidation`
+- Собственный reconnect-цикл, gzip-декомпрессия, обновление Watchdog при каждом сообщении
+- Ликвидации пишутся в `LiquidationModel` — невосстанавливаемые, только WebSocket
+
+**Калькулятор базиса (`data/basis_calculator.py`):**
+- Слушает `candle.1m.closed` (спот) и `futures.candle.1m.closed` (фьючерс)
+- При наличии обеих цен публикует `futures.basis.updated` и пишет в `FuturesMetricsModel`
+- Открытый кэш `last_basis: dict[str, dict]` — для чтения в `get_pulse_state`
+
+**Watchdog (`data/watchdog.py`):**
+- 4 стадии эскалации: `NORMAL → DEGRADED → LOST → DEAD`
+- 3 уровня диагностики: silence counter, price drift vs REST, ping/pong
+- Экспоненциальный backoff: `BACKOFF_BASE × 2^n`, максимум 10 попыток
+- При деградации критического соединения (фьючерсный WS) — немедленно пишет `DataGapModel(recoverable=False)` в БД
+- Публикует `watchdog.degraded/lost/dead/recovered/reconnecting`
+
+**Верификатор данных (`data/data_verifier.py`):**
+- 4 уровня проверки: полнота (дыры), точность OHLCV (REST сравнение, допуск 0.01%), корректность агрегации (1h биржа vs локальная), непрерывность (3×ATR spike)
+- Обновляет `CandleModel.data_trust_score` пакетным UPDATE в БД
+- Открытый `get_trust_scores() -> dict[str, int]` — для Пульса
+
+**Вкладка Пульс UI (`ui/react-app/src/components/PulseView.tsx`):**
+- 6 блоков: Соединения (статусы + rate-limit бар), Модули (таблица), Очередь задач, Критические события, Состояние данных (размер БД + базис + доверительный рейтинг), Поток событий
+- Новые типы в `useStore.ts`: `ConnectionStatus`, `ModuleStatus`, `RateLimitStatus`, `DataTrustRow`, `BasisRow`, `PulseState`, `CriticalEvent`
+- Вкладка «Пульс» добавлена в навигацию `TopBar.tsx`
+
+**WebSocket сервер (`ui/ws_server.py`):**
+- Новая команда `get_pulse_state`: собирает данные от Watchdog, BasisCalculator, DataVerifier, считает размер БД
+- `watchdog.*` и `futures.*` события добавлены в `BROADCAST_EVENTS`
+- Опциональные параметры `watchdog`, `basis_calculator`, `data_verifier`
+
+**main.py:**
+- Подключены `BingXFuturesWebSocket`, `BasisCalculator`, `Watchdog`, `DataVerifier`
+- Watchdog регистрирует оба WS (spot_ws некритический, futures_ws критический)
+- Futures свечи подписаны на сохранение в БД
+
+**Исправления багов:**
+- `useWebSocket.ts`: ключ `backtestResults` исправлен на `r.id` (в двух местах) — история тестов теперь не перезаписывается при повторных запусках той же пары
+- `useWebSocket.ts`: обработчик `watchdog.*` событий → `pushCriticalEvent`; обработчик `pulse_state` → `setPulseState`
+- Оптимизатор: `optimizer.error` теперь принудительно сбрасывает `localRunning` через смену состояния `false → true → false` — устраняет зависание кнопки "Отправка..."
+
+**Решения:**
+- Futures WS — отдельный класс (не расширение BingXWebSocket): разные форматы данных, разные endpoint'ы, независимый reconnect
+- Ликвидации только WS: REST история BingX недоступна → хранятся без агрегации, пропуски фиксируются в data_gaps с `recoverable=False`
+- `market_type` в уникальном индексе: спот и фьючерс одного символа физически хранятся в одной таблице, разделяются на уровне индекса — запрос без `market_type` вернёт оба рынка, что является осознанным выбором
+- Pulse state — pull-модель (клиент запрашивает по кнопке), не push: данные стабильны, нет смысла гонять их каждую секунду, пользователь сам решает когда обновить
+
+**Отложено:**
+- Фьючерсный REST поллер (OI, Funding Rate, Long/Short Ratio) — запланирован в Step 1 чеклисте, реализуется отдельно
+- Трёхтемпературное хранение (hot/warm/cold) и агрегация старых данных — Step 1 §6
+- Умное расписание верификаций — `DataVerifier` реализует 4 уровня, расписание добавляется позже
+
+Тесты:
+  Unit:        —
+  Integration: —
+  Smoke:       ⏳
+  Покрытие:    н/д
+
+Коммит: `—`
+Следующий шаг: Фьючерсный REST поллер (OI/Funding/L-S Ratio) → Step 1 чеклист полностью закрыт
+
+---
+
 ### [2026-04-19] Data integrity: бэкфилл, агрегация TF, WAL, авторемонт, логи, кросс-валидация
 
 **Что сделано:**

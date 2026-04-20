@@ -44,10 +44,27 @@ interface TaskRowProps {
   onResume: (id: string) => void
 }
 
+const TASK_TYPE_LABEL: Record<string, string> = {
+  backfill: 'Загрузка',
+  validation: 'Проверка',
+  backtest: 'Бэктест',
+  optimizer: 'Оптимизация',
+}
+
+const TASK_TYPE_COLOR: Record<string, string> = {
+  backfill: 'var(--accent-blue)',
+  validation: 'var(--accent-purple)',
+  backtest: 'var(--accent-green)',
+  optimizer: 'var(--accent-orange)',
+}
+
 function TaskRow({ task, onStop, onResume }: TaskRowProps) {
   const isRunning = task.status === 'running'
   const isPaused  = task.status === 'paused'
   const isValidation = task.type === 'validation'
+  const isBackground = task.type === 'backtest' || task.type === 'optimizer'
+  const typeLabel = TASK_TYPE_LABEL[task.type] ?? task.type
+  const typeColor = TASK_TYPE_COLOR[task.type] ?? 'var(--text-muted)'
 
   return (
     <div style={{
@@ -59,11 +76,14 @@ function TaskRow({ task, onStop, onResume }: TaskRowProps) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <TaskStatusIcon status={task.status} />
+        <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', background: typeColor + '18', color: typeColor, padding: '1px 6px', borderRadius: 4, flexShrink: 0 }}>
+          {typeLabel}
+        </span>
         <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', flex: 1 }}>
-          {isValidation ? `Проверка: ${task.symbol}` : `Загрузка: ${task.symbol}`}
+          {task.symbol}
           {task.period ? <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> · {task.period}</span> : null}
         </span>
-        {isRunning && (
+        {isRunning && !isBackground && (
           <button
             onClick={() => onStop(task.task_id)}
             title="Остановить"
@@ -98,17 +118,20 @@ function TaskRow({ task, onStop, onResume }: TaskRowProps) {
           <div style={{ height: 3, background: 'var(--bg-elevated)', borderRadius: 2, overflow: 'hidden' }}>
             <div style={{
               height: '100%',
-              width: `${task.percent}%`,
-              background: 'var(--accent-blue)',
+              width: isBackground ? `${task.percent || 0}%` : `${task.percent}%`,
+              background: typeColor,
               borderRadius: 2,
               transition: 'width 0.4s ease',
             }} />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
-            <span>{task.percent}% · {task.fetched}/{task.total_pages} стр.</span>
+            {isBackground
+              ? <span>{task.percent}% завершено</span>
+              : <span>{task.percent}% · {task.fetched}/{task.total_pages} стр.</span>
+            }
             <span>
-              {task.speed_cps ? `${task.speed_cps.toFixed(0)} св/с` : ''}
-              {task.eta_seconds ? ` · ETA ${formatEta(task.eta_seconds)}` : ''}
+              {!isBackground && task.speed_cps ? `${task.speed_cps.toFixed(0)} св/с` : ''}
+              {!isBackground && task.eta_seconds ? ` · ETA ${formatEta(task.eta_seconds)}` : ''}
             </span>
           </div>
         </>

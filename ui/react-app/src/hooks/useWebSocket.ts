@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store/useStore'
-import type { BacktestResultUI, OptimizerResultUI, TaskInfo } from '../store/useStore'
+import type { BacktestResultUI, OptimizerResultUI, TaskInfo, PulseState, CriticalEvent } from '../store/useStore'
 import type { BusEvent, Candle, Position, Signal, TradeRecord } from '../types'
 
 const WS_URL = 'ws://localhost:8765/ws'
@@ -20,6 +20,7 @@ export function useWebSocket() {
     setBacktestResult, setOptimizerResult,
     setBacktestRunning, setOptimizerRunning,
     setBacktestProgress,
+    setPulseState, pushCriticalEvent,
   } = useStore()
 
   // taskId → notificationId (для обновления прогресс-уведомлений)
@@ -108,7 +109,7 @@ export function useWebSocket() {
 
     if (type === 'backtest_results') {
       for (const r of (msg.results ?? []) as BacktestResultUI[]) {
-        setBacktestResult(`${r.strategy_id}:${r.symbol}:${r.timeframe}`, r)
+        setBacktestResult(r.id, r)
       }
       return
     }
@@ -121,6 +122,11 @@ export function useWebSocket() {
     if (type === 'candles_data') {
       const key = `${msg.symbol as string}:${msg.tf as string}`
       useStore.getState().setHistoricalCandles(key, msg.candles as Candle[])
+      return
+    }
+
+    if (type === 'pulse_state') {
+      setPulseState(msg as unknown as PulseState)
       return
     }
 
@@ -218,38 +224,123 @@ export function useWebSocket() {
         return
       }
       if (eventType === 'backtest.started') {
-        setBacktestRunning(data.strategy_id as string, true)
-        setBacktestProgress(data.strategy_id as string, 0)
+        const stratId = data.strategy_id as string
+        const runId   = data.run_id as string
+        setBacktestRunning(stratId, true)
+        setBacktestProgress(stratId, 0)
+        upsertTask({
+          task_id: runId, type: 'backtest',
+          symbol: data.symbol as string,
+          period: `${data.symbol}/${data.timeframe}`,
+          status: 'running', percent: 0, fetched: 0, total_pages: 0,
+          created_at: Math.floor(Date.now() / 1000),
+        })
         return
       }
       if (eventType === 'backtest.progress') {
-        setBacktestProgress(data.strategy_id as string, data.percent as number)
+        const pct = data.percent as number
+        setBacktestProgress(data.strategy_id as string, pct)
+        upsertTask({
+          task_id: data.run_id as string, type: 'backtest',
+          symbol: data.symbol as string || '',
+          status: 'running', percent: pct, fetched: 0, total_pages: 0,
+        })
         return
       }
       if (eventType === 'backtest.completed') {
         const r = data as unknown as BacktestResultUI
-        setBacktestResult(`${r.strategy_id}:${r.symbol}:${r.timeframe}`, r)
+        setBacktestResult(r.id, r)
         setBacktestRunning(r.strategy_id, false)
+        const pnl = r.metrics?.total_pnl_pct ?? 0
+        addNotification({
+          type: 'success', title: `Бэктест завершён: ${r.symbol}`,
+          message: `PnL ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}% · ${r.trades_count} сделок`,
+        })
+        upsertTask({
+          task_id: r.id, type: 'backtest',
+          symbol: r.symbol, period: `${r.symbol}/${r.timeframe}`,
+          status: 'completed', percent: 100, fetched: 0, total_pages: 0,
+        })
         return
       }
       if (eventType === 'backtest.error') {
-        setBacktestRunning(data.strategy_id as string, false)
+        const stratId = data.strategy_id as string
+        const runId   = (data.run_id as string) || stratId
+        setBacktestRunning(stratId, false)
         addNotification({ type: 'error', title: 'Ошибка бэктеста', message: data.error as string })
+        upsertTask({
+          task_id: runId, type: 'backtest',
+          symbol: (data.symbol as string) || '',
+          status: 'error', percent: 0, fetched: 0, total_pages: 0,
+          error: data.error as string,
+        })
         return
       }
       if (eventType === 'optimizer.started') {
-        setOptimizerRunning(data.strategy_id as string, true)
+        const stratId = data.strategy_id as string
+        const runId   = data.run_id as string
+        setOptimizerRunning(stratId, true)
+        upsertTask({
+          task_id: runId, type: 'optimizer',
+          symbol: data.symbol as string,
+          period: `${data.symbol}/${data.timeframe}`,
+          status: 'running', percent: 0, fetched: 0, total_pages: 0,
+          created_at: Math.floor(Date.now() / 1000),
+        })
         return
       }
       if (eventType === 'optimizer.completed') {
         const r = data as unknown as OptimizerResultUI
         setOptimizerResult(`${r.strategy_id}:${r.symbol}`, r)
         setOptimizerRunning(r.strategy_id, false)
+        addNotification({
+          type: 'success', title: `Оптимизация завершена: ${r.symbol}`,
+          message: `Лучший ${r.target_metric}: ${(r.best_metric ?? 0).toFixed(3)}`,
+        })
+        upsertTask({
+          task_id: r.run_id, type: 'optimizer',
+          symbol: r.symbol, period: `${r.symbol}/${r.timeframe}`,
+          status: 'completed', percent: 100, fetched: 0, total_pages: 0,
+        })
         return
       }
       if (eventType === 'optimizer.error') {
-        setOptimizerRunning(data.strategy_id as string, false)
+        const stratId = data.strategy_id as string
+        const runId   = (data.run_id as string) || stratId
+        setOptimizerRunning(stratId, false)
+        // Force store to true first so the useEffect in StrategiesView always sees a change
+        useStore.setState((s) => ({
+          optimizerRunning: { ...s.optimizerRunning, [stratId]: true },
+        }))
+        setTimeout(() => setOptimizerRunning(stratId, false), 0)
         addNotification({ type: 'error', title: 'Ошибка оптимизации', message: data.error as string })
+        upsertTask({
+          task_id: runId, type: 'optimizer',
+          symbol: (data.symbol as string) || '',
+          status: 'error', percent: 0, fetched: 0, total_pages: 0,
+          error: data.error as string,
+        })
+        return
+      }
+
+      // ── Watchdog events → criticalEvents ─────────────────────────────────
+      if (eventType === 'watchdog.degraded' || eventType === 'watchdog.lost' || eventType === 'watchdog.dead') {
+        const level: CriticalEvent['level'] =
+          eventType === 'watchdog.dead' ? 'critical' :
+          eventType === 'watchdog.lost' ? 'error' : 'warning'
+        const conn = data.connection as string
+        pushCriticalEvent({
+          id: `${eventType}:${conn}`,
+          level,
+          module: conn,
+          message: eventType === 'watchdog.degraded'
+            ? `Соединение ${conn} деградировало`
+            : eventType === 'watchdog.lost'
+            ? `Соединение ${conn} потеряно`
+            : `Соединение ${conn} мертво — нужно ручное вмешательство`,
+          started_at: (data.since as number) ?? Math.floor(Date.now() / 1000),
+          seen: false,
+        })
         return
       }
 
@@ -372,6 +463,10 @@ export function useWebSocket() {
     send({ type: 'command', command: 'get_backtest_results', payload: { strategy_id: strategyId } })
   }
 
+  function requestPulseState() {
+    send({ type: 'command', command: 'get_pulse_state', payload: {} })
+  }
+
   useEffect(() => {
     connect()
     return () => {
@@ -380,5 +475,5 @@ export function useWebSocket() {
     }
   }, [])
 
-  return { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults }
+  return { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults, requestPulseState }
 }

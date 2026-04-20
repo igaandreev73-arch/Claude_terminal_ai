@@ -67,6 +67,8 @@ BROADCAST_EVENTS = {
     "validation.result",
     "backtest.started", "backtest.progress", "backtest.completed", "backtest.error",
     "optimizer.started", "optimizer.completed", "optimizer.error",
+    "watchdog.degraded", "watchdog.lost", "watchdog.dead", "watchdog.recovered", "watchdog.reconnecting",
+    "futures.candle.1m.closed", "futures.orderbook.update", "futures.liquidation", "futures.basis.updated",
     "HEALTH_UPDATE",
 }
 
@@ -79,6 +81,9 @@ class WSServer:
         execution_engine: "ExecutionEngine",
         rest_client: "BingXRestClient | None" = None,
         candles_repo: "CandlesRepository | None" = None,
+        watchdog=None,
+        basis_calculator=None,
+        data_verifier=None,
         host: str = "localhost",
         port: int = 8765,
     ) -> None:
@@ -87,6 +92,9 @@ class WSServer:
         self._execution_engine = execution_engine
         self._rest_client = rest_client
         self._candles_repo = candles_repo
+        self._watchdog = watchdog
+        self._basis_calculator = basis_calculator
+        self._data_verifier = data_verifier
         self._host = host
         self._port = port
         self._clients: weakref.WeakSet[WebSocketResponse] = weakref.WeakSet()
@@ -236,6 +244,9 @@ class WSServer:
 
         elif command == "get_backtest_results":
             await self._handle_get_backtest_results(ws, payload)
+
+        elif command == "get_pulse_state":
+            await self._handle_get_pulse_state(ws)
 
     async def _handle_start_backfill(self, ws: WebSocketResponse, payload: dict) -> None:
         from data.backfill import run_manual_backfill
@@ -476,6 +487,22 @@ class WSServer:
                 step = len(eq) / 500
                 eq = [eq[int(i * step)] for i in range(500)] + [eq[-1]]
 
+            # Сериализуем сделки (максимум 2000)
+            trades_detail = [
+                {
+                    "entry_time": t.entry_time,
+                    "exit_time":  t.exit_time,
+                    "direction":  t.direction,
+                    "entry_price": t.entry_price,
+                    "exit_price":  t.exit_price,
+                    "size_usd":   t.size_usd,
+                    "pnl":        round(t.pnl, 4),
+                    "pnl_pct":    round(t.pnl_pct, 4),
+                    "closed_by":  t.closed_by,
+                }
+                for t in result.trades[:2000]
+            ]
+
             result_data = {
                 "id": run_id,
                 "strategy_id": strategy_id,
@@ -487,6 +514,7 @@ class WSServer:
                 "metrics": result.metrics,
                 "equity_curve": eq,
                 "trades_count": len(result.trades),
+                "trades_detail": trades_detail,
                 "is_optimization": False,
                 "created_at": int(time.time()),
             }
@@ -625,6 +653,106 @@ class WSServer:
             "type": "backtest_results",
             "strategy_id": strategy_id,
             "results": results,
+        })
+
+    async def _handle_get_pulse_state(self, ws: WebSocketResponse) -> None:
+        import os
+        import time as _time
+
+        # ── Connections ───────────────────────────────────────────────────────
+        connections = []
+        if self._watchdog:
+            for s in self._watchdog.get_all_statuses():
+                connections.append({
+                    "name":        s["name"],
+                    "label":       s["name"].replace("_", " ").title(),
+                    "stage":       s["stage"],
+                    "last_ok_at":  s.get("last_message_at"),
+                    "is_critical": s.get("is_critical", False),
+                    "market_type": s.get("market_type", "spot"),
+                    "silence_sec": s.get("silence_sec"),
+                })
+
+        # ── Modules (fixed list, status ok unless watchdog says otherwise) ────
+        modules = [
+            {"name": "event_bus",      "label": "Event Bus",        "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+            {"name": "spot_ws",        "label": "Spot WebSocket",   "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+            {"name": "futures_ws",     "label": "Futures WebSocket","status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+            {"name": "ta_engine",      "label": "TA Engine",        "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+            {"name": "signal_engine",  "label": "Signal Engine",    "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+            {"name": "basis_calc",     "label": "Basis Calculator", "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+        ]
+        # Downgrade module status based on watchdog stage
+        if self._watchdog:
+            stage_map = {s["name"]: s["stage"] for s in self._watchdog.get_all_statuses()}
+            for m in modules:
+                stage = stage_map.get(m["name"])
+                if stage == "degraded":
+                    m["status"] = "degraded"
+                elif stage in ("lost", "dead"):
+                    m["status"] = "frozen"
+
+        # ── Basis ─────────────────────────────────────────────────────────────
+        basis = []
+        if self._basis_calculator:
+            for sym, b in self._basis_calculator.last_basis.items():
+                basis.append({
+                    "symbol":     sym,
+                    "spot":       b.get("spot", 0),
+                    "futures":    b.get("futures", 0),
+                    "basis":      b.get("basis", 0),
+                    "basis_pct":  b.get("basis_pct", 0),
+                    "updated_at": b.get("timestamp", 0),
+                })
+
+        # ── Data trust rows ───────────────────────────────────────────────────
+        data_rows = []
+        if self._data_verifier:
+            for key, score in self._data_verifier.get_trust_scores().items():
+                parts = key.split(":")
+                if len(parts) == 3:
+                    data_rows.append({
+                        "symbol":              parts[0],
+                        "timeframe":           parts[1],
+                        "market_type":         parts[2],
+                        "last_candle_at":      None,
+                        "gaps_24h":            0,
+                        "verification_status": "ok" if score >= 80 else ("degraded" if score >= 50 else "failed"),
+                        "trust_score":         score,
+                        "size_mb":             0,
+                    })
+
+        # ── DB size ───────────────────────────────────────────────────────────
+        db_path = os.path.join("data", "terminal.db")
+        try:
+            db_size_mb = round(os.path.getsize(db_path) / (1024 * 1024), 2)
+        except Exception:
+            db_size_mb = 0.0
+
+        # ── Rate limit ────────────────────────────────────────────────────────
+        rate_limit = {"used": 0, "limit": 2400, "pct": 0.0, "priority": "NORMAL"}
+        if self._rest_client and hasattr(self._rest_client, "_rate_guard"):
+            rg = self._rest_client._rate_guard
+            used  = getattr(rg, "used",  0)
+            limit = getattr(rg, "limit", 2400) or 2400
+            pct   = round(used / limit * 100, 1)
+            rate_limit = {
+                "used": used, "limit": limit, "pct": pct,
+                "priority": "CRITICAL" if pct > 90 else ("HIGH" if pct > 70 else "NORMAL"),
+            }
+
+        await self._send(ws, {
+            "type":               "pulse_state",
+            "connections":        connections,
+            "modules":            modules,
+            "rate_limit":         rate_limit,
+            "data_rows":          data_rows,
+            "basis":              basis,
+            "db_size_mb":         db_size_mb,
+            "db_growth_mb_7d":    0,
+            "db_forecast_days":   None,
+            "last_aggregation_at": None,
+            "updated_at":         int(_time.time()),
         })
 
     async def _broadcast_event(self, event_type: str, data: dict) -> None:

@@ -25,7 +25,7 @@ def get_engine():
             url,
             echo=False,
             connect_args={
-                "timeout": 30,           # ждём до 30с при блокировке
+                "timeout": 30,
                 "check_same_thread": False,
             },
         )
@@ -41,17 +41,91 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Создаёт все таблицы если не существуют. Включает WAL-режим."""
-    from storage import models  # noqa: F401 — нужен чтобы зарегистрировать модели в Base.metadata
+    """Создаёт все таблицы если не существуют. Включает WAL-режим. Выполняет миграции."""
+    from storage import models  # noqa: F401
     from sqlalchemy import text
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # WAL позволяет параллельные читатели при одном писателе
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA busy_timeout=30000"))
         await conn.execute(text("PRAGMA synchronous=NORMAL"))
+        await _run_migrations(conn)
     log.info("Таблицы БД созданы/проверены")
+
+
+async def _run_migrations(conn) -> None:
+    """Применяет инкрементальные миграции схемы."""
+    from sqlalchemy import text
+
+    migrations = [
+        # backtest_results
+        ("ALTER TABLE backtest_results ADD COLUMN trades_detail TEXT NOT NULL DEFAULT '[]'",
+         "backtest_results.trades_detail"),
+        # candles: market_type + data_trust_score
+        ("ALTER TABLE candles ADD COLUMN market_type TEXT NOT NULL DEFAULT 'spot'",
+         "candles.market_type"),
+        ("ALTER TABLE candles ADD COLUMN data_trust_score INTEGER DEFAULT 100",
+         "candles.data_trust_score"),
+        # trades_raw: market_type
+        ("ALTER TABLE trades_raw ADD COLUMN market_type TEXT NOT NULL DEFAULT 'spot'",
+         "trades_raw.market_type"),
+        # orderbook_snapshots: market_type
+        ("ALTER TABLE orderbook_snapshots ADD COLUMN market_type TEXT NOT NULL DEFAULT 'spot'",
+         "orderbook_snapshots.market_type"),
+        # market_snapshots: market_type + basis
+        ("ALTER TABLE market_snapshots ADD COLUMN market_type TEXT NOT NULL DEFAULT 'spot'",
+         "market_snapshots.market_type"),
+        ("ALTER TABLE market_snapshots ADD COLUMN basis REAL",
+         "market_snapshots.basis"),
+    ]
+
+    for sql, name in migrations:
+        try:
+            await conn.execute(text(sql))
+            log.info(f"Миграция применена: {name}")
+        except Exception:
+            pass  # Колонка/таблица уже существует
+
+    # Миграция уникального индекса candles: добавляем market_type в constraint.
+    # SQLite не поддерживает DROP CONSTRAINT — делаем через пересоздание таблицы.
+    await _migrate_candles_unique_constraint(conn)
+
+
+async def _migrate_candles_unique_constraint(conn) -> None:
+    """
+    Обновляет уникальный индекс candles с (symbol, timeframe, open_time)
+    на (symbol, timeframe, open_time, market_type).
+    Безопасно: работает только если старый индекс ещё существует.
+    """
+    from sqlalchemy import text
+
+    # Проверяем текущие индексы таблицы candles
+    result = await conn.execute(text("PRAGMA index_list(candles)"))
+    indexes = {row[1] for row in result.fetchall()}  # имена индексов
+
+    # Если уже есть новый индекс с market_type — миграция не нужна
+    if "uq_candles" in indexes:
+        result2 = await conn.execute(text("PRAGMA index_info(uq_candles)"))
+        cols = {row[2] for row in result2.fetchall()}
+        if "market_type" in cols:
+            return  # уже актуально
+
+    log.info("Миграция: пересоздаём уникальный индекс candles с market_type...")
+    try:
+        await conn.execute(text("DROP INDEX IF EXISTS uq_candles"))
+        await conn.execute(text("DROP INDEX IF EXISTS idx_candles_lookup"))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_candles "
+            "ON candles(symbol, timeframe, open_time, market_type)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_candles_lookup "
+            "ON candles(symbol, timeframe, open_time, market_type)"
+        ))
+        log.info("Миграция uq_candles завершена")
+    except Exception as e:
+        log.warning(f"Миграция uq_candles: {e}")
 
 
 async def close_db() -> None:

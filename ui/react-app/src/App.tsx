@@ -8,10 +8,11 @@ import Analytics          from './components/Analytics'
 import DataView           from './components/DataView'
 import EventBusMonitor    from './components/EventBusMonitor'
 import StrategiesView     from './components/StrategiesView'
+import PulseView          from './components/PulseView'
 
 export default function App() {
   const { activeTab } = useStore()
-  const { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults } = useWebSocket()
+  const { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults, requestPulseState } = useWebSocket()
 
   function openPosition(params: {
     symbol: string; direction: 'bull' | 'bear'
@@ -45,6 +46,7 @@ export default function App() {
             runValidation={runValidation}
           />
         )}
+        {activeTab === 'pulse'     && <PulseView onRequestPulse={requestPulseState} />}
         {activeTab === 'events'    && <EventBusMonitor />}
       </main>
     </div>

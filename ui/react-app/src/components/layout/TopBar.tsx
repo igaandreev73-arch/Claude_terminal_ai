@@ -13,6 +13,7 @@ const NAV_TABS = [
   { id: 'analytics',  label: 'Аналитика'     },
   { id: 'strategies', label: 'Стратегии'     },
   { id: 'data',       label: 'Данные'        },
+  { id: 'pulse',      label: 'Пульс'         },
   { id: 'events',     label: 'Шина событий'  },
 ]
 

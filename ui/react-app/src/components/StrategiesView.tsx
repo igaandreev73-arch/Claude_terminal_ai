@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
-import type { BacktestResultUI, OptimizerResultUI } from '../store/useStore'
+import type { BacktestResultUI, OptimizerResultUI, TradeDetail } from '../store/useStore'
 import {
   Activity, BarChart2, BookOpen, Brain, Clock,
   Cpu, Lock, TrendingUp, X, Zap,
@@ -36,6 +36,7 @@ interface StrategyDef {
   params: Param[]; tags: string[]; module?: string
   backtestParams?: BacktestParam[]
   defaultParamGrid?: Record<string, string>
+  hideTfSelector?: boolean
 }
 
 // ── Strategy definitions ──────────────────────────────────────────────────────
@@ -64,6 +65,12 @@ const STRATEGIES: StrategyDef[] = [
       { key: 'sl_pct',    label: 'Stop-Loss',      defaultValue: 0.02, min: 0.005, max: 0.1, step: 0.005, unit: 'доля (0.02=2%)' },
       { key: 'tp_pct',    label: 'Take-Profit',   defaultValue: 0.04, min: 0.01,  max: 0.2, step: 0.01,  unit: 'доля (0.04=4%)' },
     ],
+    hideTfSelector: true,
+    defaultParamGrid: {
+      min_score: '55,60,65,70',
+      sl_pct:    '0.01,0.02,0.03',
+      tp_pct:    '0.03,0.04,0.06',
+    },
   },
   {
     id: 'ma-crossover',
@@ -231,11 +238,84 @@ function EquityCurve({ data }: { data: number[] }) {
 
 // ── Metrics grid ──────────────────────────────────────────────────────────────
 
-function MetricBox({ label, value, color }: { label: string; value: string; color?: string }) {
+interface MetricInfo { title: string; desc: string; formula: string }
+
+const METRIC_INFO: Record<string, MetricInfo> = {
+  total_trades: {
+    title: 'Количество сделок',
+    desc: 'Общее число закрытых сделок за период. Чем больше сделок — тем статистически надёжнее результаты.',
+    formula: 'Сумма всех закрытых позиций (sl / tp / сигнал / конец данных)',
+  },
+  win_rate_pct: {
+    title: 'Процент прибыльных сделок',
+    desc: 'Доля сделок, завершившихся с положительным PnL. Само по себе не гарантирует прибыльность — важен Profit Factor.',
+    formula: 'Win Rate = (Прибыльных сделок ÷ Всего сделок) × 100',
+  },
+  total_pnl_pct: {
+    title: 'Суммарный PnL',
+    desc: 'Итоговое изменение депозита за весь период в процентах от начального капитала. Учитывает комиссии.',
+    formula: 'PnL% = (Итоговый капитал − Начальный капитал) ÷ Начальный капитал × 100',
+  },
+  sharpe_ratio: {
+    title: 'Коэффициент Шарпа',
+    desc: 'Отношение средней доходности к волатильности доходности. ≥1 — хорошо, ≥2 — отлично. Показывает качество риск/доход.',
+    formula: 'Sharpe = Среднее(PnL сделок) ÷ СтандОткл(PnL сделок) × √(252)',
+  },
+  max_drawdown_pct: {
+    title: 'Максимальная просадка',
+    desc: 'Максимальное падение капитала от пика до дна. ≤10% — безопасно, >20% — высокий риск. Чем меньше, тем лучше.',
+    formula: 'MaxDD = max(Пик − Минимум после пика) ÷ Пик × 100',
+  },
+  profit_factor: {
+    title: 'Profit Factor',
+    desc: 'Отношение суммарной прибыли к суммарному убытку. >1 — стратегия прибыльна, ≥1.5 — хорошо, ≥2 — отлично.',
+    formula: 'PF = Сумма(прибыльных сделок) ÷ |Сумма(убыточных сделок)|',
+  },
+  trades_per_month: {
+    title: 'Сделок в месяц',
+    desc: 'Средняя частота торговли. Определяет ликвидность стратегии и реальность воспроизведения результатов.',
+    formula: 'Trades/мес = Всего сделок ÷ (Период в днях ÷ 30)',
+  },
+  best_trade_pnl: {
+    title: 'Лучшая сделка',
+    desc: 'Максимальный чистый доход одной сделки в USD. Помогает оценить потенциал и выявить outlier-результаты.',
+    formula: 'max(PnL) по всем закрытым сделкам',
+  },
+  worst_trade_pnl: {
+    title: 'Худшая сделка',
+    desc: 'Максимальный чистый убыток одной сделки в USD. Отражает реальный риск на сделку при заданном SL.',
+    formula: 'min(PnL) по всем закрытым сделкам',
+  },
+}
+
+function MetricBox({ label, value, color, infoKey }: { label: string; value: string; color?: string; infoKey?: string }) {
+  const [open, setOpen] = useState(false)
+  const info = infoKey ? METRIC_INFO[infoKey] : undefined
   return (
-    <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
-      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 3 }}>{label}</div>
+    <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 12px', position: 'relative' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{label}</div>
+        {info && (
+          <button
+            onClick={() => setOpen(v => !v)}
+            title={info.title}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', lineHeight: 1, color: open ? 'var(--accent-blue)' : 'var(--text-muted)', fontSize: 12, opacity: open ? 1 : 0.55 }}
+          >ℹ</button>
+        )}
+      </div>
       <div style={{ fontSize: 15, fontFamily: 'var(--font-mono)', fontWeight: 700, color: color ?? 'var(--text-primary)' }}>{value}</div>
+      {open && info && (
+        <div style={{
+          position: 'absolute', zIndex: 10, top: '100%', left: 0, right: 0, marginTop: 4,
+          background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-md)', padding: '10px 12px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 5 }}>{info.title}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 7 }}>{info.desc}</div>
+          <div style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--accent-blue)', background: 'rgba(59,130,246,0.08)', padding: '5px 8px', borderRadius: 'var(--radius-sm)', lineHeight: 1.5 }}>{info.formula}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -248,15 +328,15 @@ function MetricsGrid({ m }: { m: Record<string, number | null> }) {
   const pf  = m.profit_factor
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 16 }}>
-      <MetricBox label="Сделок"        value={String(m.total_trades ?? 0)} />
-      <MetricBox label="Win Rate"      value={`${wr.toFixed(1)}%`}         color={wr >= 50 ? 'var(--accent-green)' : '#f87171'} />
-      <MetricBox label="PnL"           value={`${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`} color={pnl >= 0 ? 'var(--accent-green)' : '#f87171'} />
-      <MetricBox label="Sharpe"        value={sh.toFixed(2)}               color={sh >= 1 ? 'var(--accent-green)' : sh >= 0 ? 'var(--accent-orange)' : '#f87171'} />
-      <MetricBox label="Max Drawdown"  value={`${dd.toFixed(1)}%`}         color={dd <= 10 ? 'var(--accent-green)' : dd <= 20 ? 'var(--accent-orange)' : '#f87171'} />
-      <MetricBox label="Profit Factor" value={pf != null ? pf.toFixed(2) : '—'} color={pf != null && pf >= 1.5 ? 'var(--accent-green)' : 'var(--text-secondary)'} />
-      <MetricBox label="Сделок/мес"   value={(m.trades_per_month ?? 0).toFixed(1)} />
-      <MetricBox label="Лучшая"        value={`$${(m.best_trade_pnl ?? 0).toFixed(2)}`} color="var(--accent-green)" />
-      <MetricBox label="Худшая"        value={`$${(m.worst_trade_pnl ?? 0).toFixed(2)}`} color="#f87171" />
+      <MetricBox label="Сделок"        value={String(m.total_trades ?? 0)} infoKey="total_trades" />
+      <MetricBox label="Win Rate"      value={`${wr.toFixed(1)}%`}  color={wr >= 50 ? 'var(--accent-green)' : '#f87171'} infoKey="win_rate_pct" />
+      <MetricBox label="PnL"           value={`${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`} color={pnl >= 0 ? 'var(--accent-green)' : '#f87171'} infoKey="total_pnl_pct" />
+      <MetricBox label="Sharpe"        value={sh.toFixed(2)} color={sh >= 1 ? 'var(--accent-green)' : sh >= 0 ? 'var(--accent-orange)' : '#f87171'} infoKey="sharpe_ratio" />
+      <MetricBox label="Max Drawdown"  value={`${dd.toFixed(1)}%`}  color={dd <= 10 ? 'var(--accent-green)' : dd <= 20 ? 'var(--accent-orange)' : '#f87171'} infoKey="max_drawdown_pct" />
+      <MetricBox label="Profit Factor" value={pf != null ? pf.toFixed(2) : '—'} color={pf != null && pf >= 1.5 ? 'var(--accent-green)' : 'var(--text-secondary)'} infoKey="profit_factor" />
+      <MetricBox label="Сделок/мес"   value={(m.trades_per_month ?? 0).toFixed(1)} infoKey="trades_per_month" />
+      <MetricBox label="Лучшая"        value={`$${(m.best_trade_pnl ?? 0).toFixed(2)}`} color="var(--accent-green)" infoKey="best_trade_pnl" />
+      <MetricBox label="Худшая"        value={`$${(m.worst_trade_pnl ?? 0).toFixed(2)}`} color="#f87171" infoKey="worst_trade_pnl" />
     </div>
   )
 }
@@ -280,6 +360,174 @@ function ModalWrap({ accent, onClose, children }: { accent: string; onClose: () 
   )
 }
 
+// ── Trades table ─────────────────────────────────────────────────────────────
+
+const CLOSED_BY_LABEL: Record<string, { label: string; color: string }> = {
+  sl:     { label: 'SL',    color: '#f87171' },
+  tp:     { label: 'TP',    color: 'var(--accent-green)' },
+  signal: { label: 'Сигн.', color: 'var(--accent-blue)' },
+  end:    { label: 'Конец', color: 'var(--text-muted)' },
+}
+
+function TradesTable({ trades, accent }: { trades: TradeDetail[]; accent: string }) {
+  const [page, setPage] = useState(0)
+  const PER_PAGE = 20
+  const total = trades.length
+  const slice = trades.slice(page * PER_PAGE, (page + 1) * PER_PAGE)
+
+  function fmtDate(ms: number) {
+    return new Date(ms).toLocaleString('ru', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  }
+
+  return (
+    <div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+              {['#', 'Вход', 'Выход', 'Напр.', 'Цена вх.', 'Цена вых.', 'PnL $', 'PnL %', 'Закрыт'].map(h => (
+                <th key={h} style={{ padding: '5px 7px', textAlign: h === '#' ? 'left' : 'right', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {slice.map((t, i) => {
+              const cb = CLOSED_BY_LABEL[t.closed_by] ?? { label: t.closed_by, color: 'var(--text-muted)' }
+              const globalIdx = page * PER_PAGE + i + 1
+              return (
+                <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
+                  <td style={{ padding: '5px 7px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{globalIdx}</td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{fmtDate(t.entry_time)}</td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', whiteSpace: 'nowrap' }}>{fmtDate(t.exit_time)}</td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: t.direction === 'long' ? 'var(--accent-green)' : '#f87171', fontWeight: 700 }}>
+                    {t.direction === 'long' ? '▲ Лонг' : '▼ Шорт'}
+                  </td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{t.entry_price.toFixed(2)}</td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{t.exit_price.toFixed(2)}</td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700, color: t.pnl >= 0 ? 'var(--accent-green)' : '#f87171' }}>
+                    {t.pnl >= 0 ? '+' : ''}{t.pnl.toFixed(2)}
+                  </td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: t.pnl_pct >= 0 ? 'var(--accent-green)' : '#f87171' }}>
+                    {t.pnl_pct >= 0 ? '+' : ''}{t.pnl_pct.toFixed(2)}%
+                  </td>
+                  <td style={{ padding: '5px 7px', textAlign: 'right', fontFamily: 'var(--font-mono)', color: cb.color, fontWeight: 700 }}>{cb.label}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      {total > PER_PAGE && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          <span>Сделки {page * PER_PAGE + 1}–{Math.min((page + 1) * PER_PAGE, total)} из {total}</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}
+              style={{ background: 'var(--bg-elevated)', border: 'none', borderRadius: 4, color: page === 0 ? 'var(--text-muted)' : accent, cursor: page === 0 ? 'default' : 'pointer', padding: '3px 8px' }}>←</button>
+            <button onClick={() => setPage(p => p + 1)} disabled={(page + 1) * PER_PAGE >= total}
+              style={{ background: 'var(--bg-elevated)', border: 'none', borderRadius: 4, color: (page + 1) * PER_PAGE >= total ? 'var(--text-muted)' : accent, cursor: (page + 1) * PER_PAGE >= total ? 'default' : 'pointer', padding: '3px 8px' }}>→</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Result card (collapsible) ─────────────────────────────────────────────────
+
+function ResultCard({
+  r, isSelected, accent, onSelect,
+}: { r: BacktestResultUI; isSelected: boolean; accent: string; onSelect: () => void }) {
+  const [expanded, setExpanded] = useState(isSelected)
+  const pnl = r.metrics.total_pnl_pct ?? 0
+  const wr  = r.metrics.win_rate_pct  ?? 0
+  const sh  = r.metrics.sharpe_ratio  ?? 0
+  const dd  = r.metrics.max_drawdown_pct ?? 0
+
+  useEffect(() => { if (isSelected) setExpanded(true) }, [isSelected])
+
+  function fmtDate(ms?: number) {
+    if (!ms) return '—'
+    return new Date(ms).toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: '2-digit' })
+  }
+
+  return (
+    <div style={{
+      borderRadius: 'var(--radius-md)', overflow: 'hidden',
+      border: `1px solid ${isSelected ? accent + '55' : 'var(--border-subtle)'}`,
+      background: isSelected ? `${accent}08` : 'var(--bg-elevated)',
+      transition: 'border-color 0.15s',
+    }}>
+      {/* Summary row */}
+      <div
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer' }}
+        onClick={() => { onSelect(); setExpanded(v => !v) }}
+      >
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{r.symbol}</span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{r.timeframe}</span>
+          {r.is_optimization && <span style={{ fontSize: 10, color: accent, background: `${accent}15`, padding: '2px 6px', borderRadius: 4 }}>OPT</span>}
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmtDate(r.period_start)} — {fmtDate(r.period_end)}</span>
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: pnl >= 0 ? 'var(--accent-green)' : '#f87171' }}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}%</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>WR {wr.toFixed(0)}%</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>S {sh.toFixed(2)}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-muted)' }}>DD {dd.toFixed(1)}%</span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.trades_count} сд.</span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)', transition: 'transform 0.2s', transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>▼</span>
+        </div>
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+          {/* Params used */}
+          {Object.keys(r.params).length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>ПАРАМЕТРЫ ЗАПУСКА</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {Object.entries(r.params).map(([k, v]) => (
+                  <span key={k} style={{ fontSize: 11, fontFamily: 'var(--font-mono)', background: `${accent}12`, color: accent, padding: '3px 8px', borderRadius: 4 }}>
+                    {k}: {typeof v === 'number' ? v : String(v)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Metrics grid */}
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>МЕТРИКИ</div>
+            <MetricsGrid m={r.metrics} />
+          </div>
+
+          {/* Equity curve */}
+          {r.equity_curve.length >= 2 && (
+            <div style={{ background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
+              <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 6 }}>КРИВАЯ КАПИТАЛА</div>
+              <EquityCurve data={r.equity_curve} />
+            </div>
+          )}
+
+          {/* Trades */}
+          {(r.trades_detail?.length ?? 0) > 0 && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>
+                СПИСОК СДЕЛОК ({r.trades_detail!.length})
+                <span style={{ marginLeft: 8, fontWeight: 400, fontSize: 9, opacity: 0.6 }}>
+                  TP=зелёный · SL=красный · Сигн.=синий
+                </span>
+              </div>
+              <TradesTable trades={r.trades_detail!} accent={accent} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Backtest Modal ────────────────────────────────────────────────────────────
 
 interface BacktestModalProps {
@@ -292,12 +540,13 @@ interface BacktestModalProps {
 }
 
 function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpenOptimizer }: BacktestModalProps) {
-  const backtestRunning  = useStore(s => s.backtestRunning)
-  const backtestProgress = useStore(s => s.backtestProgress)
-  const backtestResults  = useStore(s => s.backtestResults)
+  const isRunningStore = useStore(s => s.backtestRunning[def.id] ?? false)
+  const progress       = useStore(s => s.backtestProgress[def.id] ?? 0)
+  const backtestResults = useStore(s => s.backtestResults)
 
   const [selSymbol, setSelSymbol] = useState(SYMBOLS[0])
   const [selTf, setSelTf]         = useState('1h')
+  const [localRunning, setLocalRunning] = useState(false)
   const [paramValues, setParamValues] = useState<Record<string, number>>(() => {
     const init: Record<string, number> = {}
     for (const p of def.backtestParams ?? []) {
@@ -305,28 +554,46 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
     }
     return init
   })
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
 
   useEffect(() => { onGetResults(def.id) }, [def.id])
 
-  const isRunning  = backtestRunning[def.id]  ?? false
-  const progress   = backtestProgress[def.id] ?? 0
-  const currentKey = `${def.id}:${selSymbol}:${selTf}`
-  const currentResult: BacktestResultUI | undefined = backtestResults[currentKey]
+  // Синхронизируем localRunning со store: при любом изменении isRunningStore снимаем localRunning
+  useEffect(() => { setLocalRunning(false) }, [isRunningStore])
+
+  // Когда бэктест завершился — перезагружаем результаты и выбираем последний
+  const prevRunning = useRef(false)
+  useEffect(() => {
+    if (prevRunning.current && !isRunningStore) {
+      onGetResults(def.id)
+    }
+    prevRunning.current = isRunningStore
+  }, [isRunningStore])
+
+  const isRunning  = isRunningStore || localRunning
+  const effectiveTf = def.hideTfSelector ? '1h' : selTf
 
   const allResults = Object.values(backtestResults)
     .filter(r => r.strategy_id === def.id)
     .sort((a, b) => b.created_at - a.created_at)
 
+  // Автовыбор последнего результата при загрузке
+  useEffect(() => {
+    if (allResults.length > 0 && !selectedRunId) {
+      setSelectedRunId(allResults[0].id)
+    }
+  }, [allResults.length])
+
   function handleRun() {
-    onRun(def.id, selSymbol, selTf, paramValues)
+    setLocalRunning(true)
+    onRun(def.id, selSymbol, effectiveTf, paramValues)
   }
 
   const inputStyle: React.CSSProperties = {
     width: '100%', background: 'var(--bg-elevated)',
     border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)',
     color: 'var(--text-primary)', padding: '8px 10px', fontSize: 13,
-    fontFamily: 'var(--font-mono)', outline: 'none',
-    boxSizing: 'border-box',
+    fontFamily: 'var(--font-mono)', outline: 'none', boxSizing: 'border-box',
   }
 
   return (
@@ -344,29 +611,36 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
       </div>
 
       {/* Controls row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: def.hideTfSelector ? '1fr' : '1fr 1fr', gap: 14, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 6, fontWeight: 700, letterSpacing: '0.07em' }}>ТОРГОВАЯ ПАРА</div>
           <select value={selSymbol} onChange={e => setSelSymbol(e.target.value)} style={inputStyle}>
             {SYMBOLS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
-        <div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 6, fontWeight: 700, letterSpacing: '0.07em' }}>ТАЙМФРЕЙМ</div>
-          <select value={selTf} onChange={e => setSelTf(e.target.value)} style={inputStyle}>
-            {TIMEFRAMES.map(t => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
+        {!def.hideTfSelector && (
+          <div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 6, fontWeight: 700, letterSpacing: '0.07em' }}>ТАЙМФРЕЙМ</div>
+            <select value={selTf} onChange={e => setSelTf(e.target.value)} style={inputStyle}>
+              {TIMEFRAMES.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+        )}
       </div>
+      {def.hideTfSelector && (
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 14, padding: '6px 10px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
+          ℹ MTF Confluence анализирует все таймфреймы (1m–1d) самостоятельно — выбор TF недоступен
+        </div>
+      )}
 
       {/* Editable params */}
       {(def.backtestParams?.length ?? 0) > 0 && (
-        <div style={{ marginBottom: 18 }}>
+        <div style={{ marginBottom: 14 }}>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 10, fontWeight: 700, letterSpacing: '0.07em' }}>ПАРАМЕТРЫ СТРАТЕГИИ</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
             {def.backtestParams!.map(p => (
-              <div key={p.key} style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '11px 14px' }}>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 5 }}>
+              <div key={p.key} style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '10px 12px' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
                   {p.label}{p.unit && <span style={{ marginLeft: 5, opacity: 0.6, fontSize: 10 }}>({p.unit})</span>}
                 </div>
                 <input
@@ -376,7 +650,7 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
                     const v = parseFloat(e.target.value)
                     if (!isNaN(v)) setParamValues(prev => ({ ...prev, [p.key]: v }))
                   }}
-                  style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, width: '100%', padding: 0 }}
+                  style={{ background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 700, width: '100%', padding: 0 }}
                 />
               </div>
             ))}
@@ -385,7 +659,7 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
       )}
 
       {/* Action buttons */}
-      <div style={{ display: 'flex', gap: 10, marginBottom: isRunning ? 12 : 24 }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
         <button
           onClick={handleRun} disabled={isRunning}
           style={{
@@ -405,7 +679,6 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
               padding: '11px 18px', border: `1px solid ${def.accent}44`, borderRadius: 'var(--radius-md)',
               fontSize: 13, fontWeight: 600, cursor: 'pointer',
               background: 'none', color: def.accent, whiteSpace: 'nowrap',
-              transition: 'background 0.15s',
             }}
             onMouseEnter={e => (e.currentTarget.style.background = def.accent + '12')}
             onMouseLeave={e => (e.currentTarget.style.background = 'none')}
@@ -417,85 +690,50 @@ function BacktestModal({ def, initialParams, onClose, onRun, onGetResults, onOpe
 
       {/* Прогресс-бар */}
       {isRunning && (
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ height: 6, background: 'var(--bg-elevated)', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{
               height: '100%', borderRadius: 3,
-              width: `${progress}%`,
+              width: isRunningStore ? `${progress}%` : '5%',
               background: `linear-gradient(90deg, ${def.accent}, ${def.accent}bb)`,
-              transition: 'width 0.4s ease',
+              transition: isRunningStore ? 'width 0.4s ease' : 'width 2s ease',
               boxShadow: `0 0 8px ${def.accent}66`,
+              animation: !isRunningStore ? 'none' : undefined,
             }} />
           </div>
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, fontFamily: 'var(--font-mono)' }}>
-            Прогон по историческим свечам: {progress}% завершено
+            {isRunningStore
+              ? `Прогон по историческим свечам: ${progress}% завершено`
+              : 'Отправка запроса на сервер…'}
           </div>
         </div>
       )}
 
-      {/* Results */}
-      {currentResult && (
+      {/* Results history */}
+      {allResults.length > 0 && (
         <>
-          <div style={{ height: 1, background: `linear-gradient(90deg, ${def.accent}55, transparent)`, marginBottom: 18 }} />
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 12, fontWeight: 700, letterSpacing: '0.07em' }}>
-            РЕЗУЛЬТАТЫ: {currentResult.symbol} {currentResult.timeframe}
-            {currentResult.period_start && (
-              <span style={{ fontWeight: 400, marginLeft: 8 }}>
-                {new Date(currentResult.period_start).toLocaleDateString('ru')} — {new Date(currentResult.period_end!).toLocaleDateString('ru')}
-              </span>
-            )}
-            {currentResult.is_optimization && <span style={{ marginLeft: 8, color: def.accent }}>· OPTIMIZED</span>}
+          <div style={{ height: 1, background: `linear-gradient(90deg, ${def.accent}55, transparent)`, marginBottom: 16 }} />
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 10, fontWeight: 700, letterSpacing: '0.07em' }}>
+            РЕЗУЛЬТАТЫ ПРОГОНОВ ({allResults.length})
           </div>
-          <MetricsGrid m={currentResult.metrics} />
-          {currentResult.equity_curve.length >= 2 && (
-            <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '12px 16px', marginBottom: 20 }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>КРИВАЯ КАПИТАЛА</div>
-              <EquityCurve data={currentResult.equity_curve} />
-            </div>
-          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {allResults.map(r => (
+              <ResultCard
+                key={r.id}
+                r={r}
+                isSelected={selectedRunId === r.id}
+                accent={def.accent}
+                onSelect={() => setSelectedRunId(r.id)}
+              />
+            ))}
+          </div>
         </>
       )}
 
-      {/* Per-pair history */}
-      {allResults.length > 0 && (
-        <>
-          <div style={{ height: 1, background: 'var(--border-subtle)', marginBottom: 14 }} />
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 10, fontWeight: 700, letterSpacing: '0.07em' }}>ИСТОРИЯ ПО ПАРАМ</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {allResults.map(r => {
-              const key = `${r.strategy_id}:${r.symbol}:${r.timeframe}`
-              const active = currentKey === key
-              const pnl = r.metrics.total_pnl_pct ?? 0
-              const wr  = r.metrics.win_rate_pct  ?? 0
-              const sh  = r.metrics.sharpe_ratio  ?? 0
-              return (
-                <div
-                  key={r.id}
-                  onClick={() => { setSelSymbol(r.symbol); setSelTf(r.timeframe) }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '8px 12px', cursor: 'pointer', borderRadius: 'var(--radius-sm)',
-                    background: active ? `${def.accent}10` : 'var(--bg-elevated)',
-                    border: `1px solid ${active ? def.accent + '44' : 'transparent'}`,
-                    transition: 'background 0.15s',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{r.symbol}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.timeframe}</span>
-                    {r.is_optimization && <span style={{ fontSize: 10, color: def.accent, background: `${def.accent}15`, padding: '2px 6px', borderRadius: 4 }}>OPT</span>}
-                  </div>
-                  <div style={{ display: 'flex', gap: 14 }}>
-                    <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: pnl >= 0 ? 'var(--accent-green)' : '#f87171' }}>{pnl >= 0 ? '+' : ''}{pnl.toFixed(1)}%</span>
-                    <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>WR {wr.toFixed(0)}%</span>
-                    <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>S {sh.toFixed(2)}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.trades_count} сд.</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </>
+      {allResults.length === 0 && !isRunning && (
+        <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: 13 }}>
+          Нет прогонов. Нажмите «Запустить бэктест» для первого теста.
+        </div>
       )}
     </ModalWrap>
   )
@@ -512,13 +750,14 @@ interface OptimizerModalProps {
 }
 
 function OptimizerModal({ def, onClose, onRun, onApplyAndBacktest, onGetResults }: OptimizerModalProps) {
-  const optimizerRunning = useStore(s => s.optimizerRunning)
+  const isRunningStore = useStore(s => s.optimizerRunning[def.id] ?? false)
   const optimizerResults = useStore(s => s.optimizerResults)
 
   const [selSymbol, setSelSymbol]       = useState(SYMBOLS[0])
   const [selTf, setSelTf]               = useState('1h')
   const [targetMetric, setTargetMetric] = useState(TARGET_METRICS[0].value)
   const [walkForward, setWalkForward]   = useState(true)
+  const [localRunning, setLocalRunning] = useState(false)
   const [gridValues, setGridValues]     = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {}
     for (const p of def.backtestParams ?? []) {
@@ -528,8 +767,9 @@ function OptimizerModal({ def, onClose, onRun, onApplyAndBacktest, onGetResults 
   })
 
   useEffect(() => { onGetResults(def.id) }, [def.id])
+  useEffect(() => { setLocalRunning(false) }, [isRunningStore])
 
-  const isRunning = optimizerRunning[def.id] ?? false
+  const isRunning = isRunningStore || localRunning
   const optKey    = `${def.id}:${selSymbol}`
   const optResult: OptimizerResultUI | undefined = optimizerResults[optKey]
 
@@ -550,6 +790,7 @@ function OptimizerModal({ def, onClose, onRun, onApplyAndBacktest, onGetResults 
   function handleRun() {
     const grid = parseGrid()
     if (Object.keys(grid).length === 0) return
+    setLocalRunning(true)
     onRun(def.id, selSymbol, selTf, grid, targetMetric, walkForward)
   }
 
@@ -643,11 +884,28 @@ function OptimizerModal({ def, onClose, onRun, onApplyAndBacktest, onGetResults 
           fontSize: 13, fontWeight: 700, cursor: isRunning ? 'not-allowed' : 'pointer',
           background: isRunning ? 'var(--bg-elevated)' : def.accent,
           color: isRunning ? 'var(--text-muted)' : '#000',
-          marginBottom: 22,
+          marginBottom: isRunning ? 12 : 22,
         }}
       >
         {isRunning ? `⟳ Оптимизация ${totalCombos()} комбинаций...` : `▶ Запустить оптимизацию · Метрика: ${targetLabel}`}
       </button>
+
+      {/* Прогресс оптимизации */}
+      {isRunning && (
+        <div style={{ marginBottom: 22 }}>
+          <div style={{ height: 6, background: 'var(--bg-elevated)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 3, width: isRunningStore ? '70%' : '8%',
+              background: `linear-gradient(90deg, ${def.accent}, ${def.accent}bb)`,
+              transition: 'width 3s ease',
+              boxShadow: `0 0 8px ${def.accent}66`,
+            }} />
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, fontFamily: 'var(--font-mono)' }}>
+            {isRunningStore ? `Перебор комбинаций параметров (${totalCombos()} вариантов)…` : 'Отправка запроса на сервер…'}
+          </div>
+        </div>
+      )}
 
       {/* Optimizer results */}
       {optResult && optResult.symbol === selSymbol && (

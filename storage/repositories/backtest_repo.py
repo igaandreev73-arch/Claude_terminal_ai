@@ -13,6 +13,9 @@ from storage.models import BacktestResultModel
 
 log = get_logger("BacktestRepo")
 
+_TRADE_FIELDS = ("params", "metrics", "equity_curve", "trades_count",
+                 "trades_detail", "is_optimization", "created_at")
+
 
 class BacktestRepository:
 
@@ -30,17 +33,15 @@ class BacktestRepository:
             "metrics": json.dumps(data.get("metrics") or {}),
             "equity_curve": json.dumps(data.get("equity_curve") or []),
             "trades_count": data.get("trades_count", 0),
+            "trades_detail": json.dumps(data.get("trades_detail") or []),
             "is_optimization": data.get("is_optimization", False),
             "created_at": data.get("created_at", int(time.time())),
         }
         async with factory() as session:
             stmt = insert(BacktestResultModel).values(**row).on_conflict_do_update(
                 index_elements=["id"],
-                set_={
-                    col: getattr(insert(BacktestResultModel).values(**row).excluded, col)
-                    for col in ("params", "metrics", "equity_curve", "trades_count",
-                                "is_optimization", "created_at")
-                },
+                set_={col: getattr(insert(BacktestResultModel).values(**row).excluded, col)
+                      for col in _TRADE_FIELDS},
             )
             await session.execute(stmt)
             await session.commit()
@@ -87,6 +88,7 @@ def _row_to_dict(row: BacktestResultModel) -> dict:
         "metrics": json.loads(row.metrics),
         "equity_curve": json.loads(row.equity_curve),
         "trades_count": row.trades_count,
+        "trades_detail": json.loads(row.trades_detail or "[]"),
         "is_optimization": row.is_optimization,
         "created_at": row.created_at,
     }
