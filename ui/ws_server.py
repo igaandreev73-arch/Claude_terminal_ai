@@ -660,18 +660,43 @@ class WSServer:
         import time as _time
 
         # ── Connections ───────────────────────────────────────────────────────
-        connections = []
+        now_ts = _time.time()
+
+        # Синтетические соединения которые Watchdog не отслеживает
+        ws_ui_stage = "normal" if list(self._clients) else "lost"
+        rest_stage  = "normal" if self._rest_client else "stopped"
+        db_stage    = "normal"  # если мы отвечаем — БД доступна
+        try:
+            from storage.database import get_session_factory
+            get_session_factory()
+        except Exception:
+            db_stage = "lost"
+
+        connections = [
+            {"name": "ws_ui",        "label": "WebSocket UI",       "stage": ws_ui_stage, "last_ok_at": now_ts, "is_critical": False, "market_type": "internal"},
+            {"name": "spot_rest",    "label": "REST API Спот",       "stage": rest_stage,  "last_ok_at": now_ts if rest_stage == "normal" else None, "is_critical": False, "market_type": "spot"},
+            {"name": "futures_rest", "label": "REST API Фьючерсы",   "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "futures"},
+            {"name": "local_db",     "label": "Локальная БД",        "stage": db_stage,    "last_ok_at": now_ts,  "is_critical": True,  "market_type": "internal"},
+            {"name": "fear_greed",   "label": "Fear & Greed API",    "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "external"},
+            {"name": "news_feed",    "label": "Новостной фид",       "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "external"},
+        ]
+
+        # Добавляем WS-соединения из Watchdog (spot_ws, futures_ws)
         if self._watchdog:
+            watchdog_conns = []
             for s in self._watchdog.get_all_statuses():
-                connections.append({
+                labels = {"spot_ws": "WS Спот BingX", "futures_ws": "WS Фьючерсы BingX"}
+                watchdog_conns.append({
                     "name":        s["name"],
-                    "label":       s["name"].replace("_", " ").title(),
+                    "label":       labels.get(s["name"], s["name"].replace("_", " ").title()),
                     "stage":       s["stage"],
                     "last_ok_at":  s.get("last_message_at"),
                     "is_critical": s.get("is_critical", False),
                     "market_type": s.get("market_type", "spot"),
                     "silence_sec": s.get("silence_sec"),
                 })
+            # Вставляем WS-соединения после ws_ui (позиция 1)
+            connections = connections[:1] + watchdog_conns + connections[1:]
 
         # ── Modules (fixed list, status ok unless watchdog says otherwise) ────
         modules = [

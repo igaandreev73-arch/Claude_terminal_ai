@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useStore } from '../store/useStore'
 import type { ConnectionStatus, ModuleStatus, DataTrustRow, BasisRow } from '../store/useStore'
 
@@ -460,6 +460,11 @@ export default function PulseView({ onRequestPulse }: PulseViewProps) {
   const connected  = useStore(s => s.connected)
   const criticalEvents = useStore(s => s.criticalEvents)
   const unseenCount = criticalEvents.filter(e => !e.seen).length
+
+  // Запрашиваем при монтировании и при восстановлении соединения
+  useEffect(() => {
+    if (connected) onRequestPulse()
+  }, [connected])
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
