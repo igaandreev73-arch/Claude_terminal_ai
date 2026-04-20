@@ -1,6 +1,7 @@
 import asyncio
 import gzip
 import json
+import time as _time
 import uuid
 from typing import Callable, Awaitable
 
@@ -38,6 +39,10 @@ class BingXWebSocket:
         self._task: asyncio.Task | None = None
         # Track last candle per symbol to detect close via open_time change
         self._prev_candles: dict[str, Candle] = {}
+        # Статистика для Pulse
+        self.last_message_at: float = 0.0
+        self.messages_per_min: int = 0
+        self._msg_count_window: list[float] = []
 
     async def start(self) -> None:
         self._running = True
@@ -111,6 +116,12 @@ class BingXWebSocket:
                 break
 
     async def _handle_message(self, msg: aiohttp.WSMessage) -> None:
+        now = _time.time()
+        self.last_message_at = now
+        self._msg_count_window.append(now)
+        self._msg_count_window = [t for t in self._msg_count_window if t >= now - 60]
+        self.messages_per_min = len(self._msg_count_window)
+
         if msg.type == aiohttp.WSMsgType.BINARY:
             try:
                 text = gzip.decompress(msg.data).decode("utf-8")

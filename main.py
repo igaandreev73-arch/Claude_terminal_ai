@@ -105,6 +105,8 @@ async def main() -> None:
         watchdog=watchdog,
         basis_calculator=basis_calculator,
         data_verifier=data_verifier,
+        ws_client=ws_client,
+        futures_ws=futures_ws,
         host=os.getenv("WS_HOST", "localhost"),
         port=int(os.getenv("WS_PORT", "8765")),
     )

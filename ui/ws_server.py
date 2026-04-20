@@ -84,6 +84,8 @@ class WSServer:
         watchdog=None,
         basis_calculator=None,
         data_verifier=None,
+        ws_client=None,
+        futures_ws=None,
         host: str = "localhost",
         port: int = 8765,
     ) -> None:
@@ -95,6 +97,8 @@ class WSServer:
         self._watchdog = watchdog
         self._basis_calculator = basis_calculator
         self._data_verifier = data_verifier
+        self._ws_client = ws_client
+        self._futures_ws = futures_ws
         self._host = host
         self._port = port
         self._clients: weakref.WeakSet[WebSocketResponse] = weakref.WeakSet()
@@ -698,24 +702,62 @@ class WSServer:
             # Вставляем WS-соединения после ws_ui (позиция 1)
             connections = connections[:1] + watchdog_conns + connections[1:]
 
-        # ── Modules (fixed list, status ok unless watchdog says otherwise) ────
+        # ── Modules — реальные метрики из модулей ────────────────────────────
+        bus = self._bus
+        spot  = self._ws_client
+        fut   = self._futures_ws
+
+        def _ws_status(ws_obj, watchdog_name: str) -> str:
+            if self._watchdog:
+                stage = self._watchdog.statuses.get(watchdog_name, {}).get("stage", "normal")
+                if stage == "degraded":  return "degraded"
+                if stage in ("lost", "dead"): return "frozen"
+            return "ok" if ws_obj and getattr(ws_obj, "last_message_at", 0) > 0 else "ok"
+
         modules = [
-            {"name": "event_bus",      "label": "Event Bus",        "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
-            {"name": "spot_ws",        "label": "Spot WebSocket",   "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
-            {"name": "futures_ws",     "label": "Futures WebSocket","status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
-            {"name": "ta_engine",      "label": "TA Engine",        "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
-            {"name": "signal_engine",  "label": "Signal Engine",    "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
-            {"name": "basis_calc",     "label": "Basis Calculator", "status": "ok", "last_action_at": int(_time.time()), "events_per_min": 0, "latency_ms": None},
+            {
+                "name": "event_bus", "label": "Event Bus",
+                "status": "ok",
+                "last_action_at": int(bus.last_event_at) if bus.last_event_at else None,
+                "events_per_min": bus.events_per_min(),
+                "latency_ms": bus.last_latency_ms,
+            },
+            {
+                "name": "spot_ws", "label": "Spot WebSocket",
+                "status": _ws_status(spot, "spot_ws"),
+                "last_action_at": int(spot.last_message_at) if spot and spot.last_message_at else None,
+                "events_per_min": spot.messages_per_min if spot else 0,
+                "latency_ms": None,
+            },
+            {
+                "name": "futures_ws", "label": "Futures WebSocket",
+                "status": _ws_status(fut, "futures_ws"),
+                "last_action_at": int(fut.last_message_at) if fut and fut.last_message_at else None,
+                "events_per_min": fut.messages_per_min if fut else 0,
+                "latency_ms": None,
+            },
+            {
+                "name": "ta_engine", "label": "TA Engine",
+                "status": "ok",
+                "last_action_at": int(bus.last_event_at) if bus.last_event_at else None,
+                "events_per_min": bus.events_per_min_prefix("ta."),
+                "latency_ms": None,
+            },
+            {
+                "name": "signal_engine", "label": "Signal Engine",
+                "status": "ok",
+                "last_action_at": int(bus.last_event_at) if bus.last_event_at else None,
+                "events_per_min": bus.events_per_min_prefix("signal."),
+                "latency_ms": None,
+            },
+            {
+                "name": "basis_calc", "label": "Basis Calculator",
+                "status": "ok",
+                "last_action_at": int(bus.last_event_at) if bus.last_event_at else None,
+                "events_per_min": bus.events_per_min_prefix("futures.basis."),
+                "latency_ms": None,
+            },
         ]
-        # Downgrade module status based on watchdog stage
-        if self._watchdog:
-            stage_map = {s["name"]: s["stage"] for s in self._watchdog.get_all_statuses()}
-            for m in modules:
-                stage = stage_map.get(m["name"])
-                if stage == "degraded":
-                    m["status"] = "degraded"
-                elif stage in ("lost", "dead"):
-                    m["status"] = "frozen"
 
         # ── Basis ─────────────────────────────────────────────────────────────
         basis = []
