@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
 import type { ConnectionStatus, ModuleStatus, DataTrustRow, BasisRow } from '../store/useStore'
 
@@ -130,6 +131,105 @@ function ConnectionsBlock() {
   )
 }
 
+// ── Module descriptions ───────────────────────────────────────────────────────
+
+const MODULE_INFO: Record<string, { title: string; body: string }> = {
+  event_bus: {
+    title: 'Event Bus — шина событий',
+    body: 'Центральный брокер сообщений системы. Все модули общаются только через него — никаких прямых вызовов друг друга. Работает по принципу publish/subscribe: модуль публикует событие (например candle.1m.closed), все подписчики получают его асинхронно. Это позволяет добавлять новые модули без изменения существующих. Если Event Bus завис — вся система перестаёт обмениваться данными.',
+  },
+  spot_ws: {
+    title: 'Spot WebSocket — спотовый поток',
+    body: 'Постоянное WebSocket-соединение с BingX Spot API. Подписан на потоки: свечи 1m (kline), стакан orderbook, поток сделок. Публикует события candle.1m.tick и candle.1m.closed для TF Aggregator. Поток сделок используется для расчёта CVD (Cumulative Volume Delta) — соотношения покупок и продаж. Частично невосстанавливаем: если соединение упало, пропущенный поток сделок восстановить нельзя.',
+  },
+  futures_ws: {
+    title: 'Futures WebSocket — фьючерсный поток ⚡',
+    body: 'WebSocket-соединение с BingX Futures API. Подписан на: свечи 1m, стакан, поток сделок и — критически важно — @forceOrder (принудительные ликвидации). Ликвидации полностью невосстанавливаемы: BingX не хранит их историю через REST. Если это соединение деградирует, система немедленно записывает data_gap в БД с пометкой recoverable=False. Обозначен ⚡ как критический поток.',
+  },
+  ta_engine: {
+    title: 'TA Engine — технический анализ',
+    body: 'Вычисляет индикаторы на каждой закрытой свече: EMA (9/21/55/200), RSI(14), MACD(12/26/9), Bollinger Bands(20), ATR(14), VWAP. Слушает события candle.1m.closed и timeframe-свечи. Публикует ta.* события с рассчитанными значениями. Результаты используются Signal Engine и MTF Confluence Engine для генерации торговых сигналов.',
+  },
+  signal_engine: {
+    title: 'Signal Engine — генератор сигналов',
+    body: 'Агрегирует сигналы от всех аналитических модулей (TA Engine, SMC Engine, MTF Confluence, Anomaly Detector). Присваивает сигналу оценку score от 0 до 100. Сигналы со score ≥ 60 попадают в очередь. TTL сигнала — 5 минут. Дедупликация по symbol+direction: два одинаковых сигнала за минуту не дублируются. Публикует signal.generated, signal.expired, signal.executed.',
+  },
+  basis_calc: {
+    title: 'Basis Calculator — калькулятор базиса',
+    body: 'Вычисляет базис (разницу цен спот и фьючерс) на каждой закрытой минутной свече. Базис = фьючерсная цена − спотовая цена. Базис % = базис / спотовая × 100. Положительный и растущий базис = контанго (рынок ожидает роста). Отрицательный = бэквордация (доминирует страх или шорт). Резкое изменение базиса часто предшествует сильному движению. Сохраняет в таблицу futures_metrics.',
+  },
+}
+
+// ── Module info popover ───────────────────────────────────────────────────────
+
+function ModuleInfoPopover({ moduleName }: { moduleName: string }) {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const info = MODULE_INFO[moduleName]
+  if (!info) return null
+
+  const rect = btnRef.current?.getBoundingClientRect()
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        onClick={e => { e.stopPropagation(); setOpen(v => !v) }}
+        title="Подробнее о модуле"
+        style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          padding: '0 3px', lineHeight: 1, verticalAlign: 'middle',
+          color: open ? 'var(--accent-blue)' : 'var(--text-muted)',
+          fontSize: 12, transition: 'color 0.15s',
+        }}
+      >
+        ⓘ
+      </button>
+
+      {open && rect && createPortal(
+        <>
+          {/* backdrop */}
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 998 }}
+          />
+          {/* popup */}
+          <div style={{
+            position: 'fixed',
+            top: rect.bottom + 6,
+            left: Math.min(rect.left, window.innerWidth - 340),
+            width: 320,
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-default)',
+            borderRadius: 'var(--radius-lg)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            zIndex: 999,
+            padding: '14px 16px',
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>
+              {info.title}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.65 }}>
+              {info.body}
+            </div>
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                marginTop: 10, background: 'none', border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)', color: 'var(--text-muted)',
+                fontSize: 11, cursor: 'pointer', padding: '3px 10px',
+              }}
+            >
+              Закрыть
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
+    </>
+  )
+}
+
 // ── Block 2 — Modules ─────────────────────────────────────────────────────────
 
 function ModulesBlock() {
@@ -159,7 +259,12 @@ function ModulesBlock() {
         <tbody>
           {modules.map(m => (
             <tr key={m.name} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-              <td style={{ padding: '5px 8px', color: 'var(--text-primary)', fontWeight: 500 }}>{m.label}</td>
+              <td style={{ padding: '5px 8px', color: 'var(--text-primary)', fontWeight: 500 }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                  {m.label}
+                  <ModuleInfoPopover moduleName={m.name} />
+                </span>
+              </td>
               <td style={{ padding: '5px 8px', textAlign: 'right' }}>
                 <span style={{ fontSize: 10, color: MODULE_STATUS_COLOR[m.status], fontFamily: 'var(--font-mono)' }}>
                   {MODULE_STATUS_LABEL[m.status] ?? m.status}
