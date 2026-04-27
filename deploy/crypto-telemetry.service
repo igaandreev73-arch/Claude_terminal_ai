@@ -1,0 +1,17 @@
+﻿[Unit]
+Description=Crypto Terminal - Telemetry Service
+After=network.target crypto-collector.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/collector
+EnvironmentFile=/opt/collector/.env
+ExecStart=/opt/collector/venv/bin/uvicorn telemetry.server:app --host 0.0.0.0 --port 8800 --workers 1
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/collector/logs/telemetry.log
+StandardError=append:/opt/collector/logs/telemetry.log
+
+[Install]
+WantedBy=multi-user.target
