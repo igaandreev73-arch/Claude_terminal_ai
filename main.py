@@ -126,6 +126,34 @@ async def main() -> None:
     for event_type in futures_candle_events:
         event_bus.subscribe(event_type, lambda e, r=candles_repo: _on_candle_closed(e, r))
 
+    # --- Ликвидации фьючерсов -> БД (невосстанавливаемые данные!) ---
+    async def _on_liquidation(event):
+        import time as _t
+        from storage.database import get_session_factory
+        from storage.models import LiquidationModel
+        from sqlalchemy.dialects.sqlite import insert as si
+        try:
+            d = event.data
+            factory = get_session_factory()
+            async with factory() as session:
+                stmt = si(LiquidationModel).values(
+                    symbol=d.get("symbol", ""),
+                    timestamp=d.get("timestamp", int(_t.time()*1000)),
+                    side=d.get("side", "unknown"),
+                    price=float(d.get("price", 0)),
+                    quantity=float(d.get("quantity", 0)),
+                    value_usd=d.get("value_usd"),
+                    liq_type=d.get("liq_type", "forced"),
+                    market_type="futures",
+                ).on_conflict_do_nothing()
+                await session.execute(stmt)
+                await session.commit()
+        except Exception as exc:
+            log.error(f"Ошибка записи ликвидации: {exc}")
+
+    event_bus.subscribe("futures.liquidation", _on_liquidation)
+    log.info("Подписка на ликвидации фьючерсов активна")
+
     # --- Watchdog: регистрируем оба WS-соединения ---
     watchdog.register(
         "spot_ws", market_type="spot", is_critical=False,

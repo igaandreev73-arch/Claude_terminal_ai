@@ -22,6 +22,7 @@ class CandlesRepository:
                     symbol=candle.symbol,
                     timeframe=candle.timeframe,
                     open_time=candle.open_time,
+                    market_type=getattr(candle, "market_type", "spot"),
                     open=candle.open,
                     high=candle.high,
                     low=candle.low,
@@ -29,10 +30,11 @@ class CandlesRepository:
                     volume=candle.volume,
                     is_closed=candle.is_closed,
                     source=candle.source,
+                    data_trust_score=100,
                     created_at=int(time.time()),
                 )
                 .on_conflict_do_update(
-                    index_elements=["symbol", "timeframe", "open_time"],
+                    index_elements=["symbol", "timeframe", "open_time", "market_type"],
                     set_=dict(
                         high=candle.high,
                         low=candle.low,
@@ -60,6 +62,7 @@ class CandlesRepository:
                         symbol=c.symbol,
                         timeframe=c.timeframe,
                         open_time=c.open_time,
+                        market_type=getattr(c, 'market_type', 'spot'),
                         open=c.open,
                         high=c.high,
                         low=c.low,
@@ -67,13 +70,14 @@ class CandlesRepository:
                         volume=c.volume,
                         is_closed=c.is_closed,
                         source=c.source,
+                        data_trust_score=getattr(c, 'data_trust_score', 100),
                         created_at=now,
                     )
                     for c in batch
                 ]
                 stmt = insert(CandleModel).values(rows)
                 stmt = stmt.on_conflict_do_update(
-                    index_elements=["symbol", "timeframe", "open_time"],
+                    index_elements=["symbol", "timeframe", "open_time", "market_type"],
                     set_={
                         col: getattr(stmt.excluded, col)
                         for col in ("high", "low", "close", "volume", "is_closed")

@@ -5,6 +5,8 @@ import time as _time
 import uuid
 from typing import Callable, Awaitable
 
+import ssl
+import certifi
 import aiohttp
 
 from core.event_bus import EventBus
@@ -47,7 +49,8 @@ class BingXWebSocket:
     async def start(self) -> None:
         self._running = True
         # ThreadedResolver uses OS socket.getaddrinfo — respects VPN/system DNS
-        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver(), ssl=ssl_ctx)
         self._session = aiohttp.ClientSession(connector=connector)
         self._task = asyncio.create_task(self._run_loop())
         log.info(f"BingX WS запущен для символов: {self._symbols}")

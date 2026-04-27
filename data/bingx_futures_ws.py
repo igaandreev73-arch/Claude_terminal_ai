@@ -22,6 +22,8 @@ import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+import ssl
+import certifi
 import aiohttp
 
 from core.logger import get_logger
@@ -84,7 +86,8 @@ class BingXFuturesWebSocket:
         log.info("Futures WS остановлен")
 
     async def _connect_and_run(self) -> None:
-        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver(), ssl=ssl_ctx)
         async with aiohttp.ClientSession(connector=connector) as session:
             async with session.ws_connect(
                 WS_URL,

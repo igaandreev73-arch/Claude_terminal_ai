@@ -14,7 +14,7 @@ aiosqlite>=0.19
 
 # Технический анализ
 pandas>=2.0
-pandas-ta>=0.3
+pandas-ta==0.4.71b0
 
 # Тестирование
 pytest>=7.4
