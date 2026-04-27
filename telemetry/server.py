@@ -161,7 +161,7 @@ async def data_validate(request:Request,symbol:str="BTC/USDT",days:int=1):
 async def data_gaps(request:Request):
     _auth(request)
     conn=_db(); cur=conn.cursor()
-    cur.execute("SELECT * FROM data_gaps ORDER BY start_time DESC LIMIT 100")
+    cur.execute("SELECT * FROM data_gaps ORDER BY gap_start DESC LIMIT 100")
     gaps=[dict(r) for r in cur.fetchall()]; conn.close()
     return {"gaps":gaps,"total":len(gaps)}
 
