@@ -169,14 +169,15 @@ async def data_gaps(request:Request):
 async def get_symbols(request:Request):
     _auth(request); return {"symbols":_syms()}
 
-class SymReq(BaseModel): symbol:str
+class SymReq(BaseModel): symbol:str; market_type:str='spot'
 
 @app.post("/symbols/add")
 async def add_sym(body:SymReq,request:Request):
     _auth(request); syms=_syms(); sym=body.symbol.upper().replace("-","/")
-    if sym in syms: return {"status":"exists","symbol":sym}
-    syms.append(sym); _upd_env("SYMBOLS",",".join(syms)); _run(f"systemctl restart {SERVICE}")
-    return {"status":"added","symbol":sym,"all_symbols":syms}
+    env_key = "SYMBOLS" if body.market_type == "spot" else "FUTURES_SYMBOLS"
+    if sym in syms: return {"status":"exists","symbol":sym,"market_type":body.market_type}
+    syms.append(sym); _upd_env(env_key,",".join(syms)); _run(f"systemctl restart {SERVICE}")
+    return {"status":"added","symbol":sym,"market_type":body.market_type,"all_symbols":syms}
 
 @app.post("/symbols/remove")
 async def rm_sym(body:SymReq,request:Request):
@@ -185,13 +186,17 @@ async def rm_sym(body:SymReq,request:Request):
     syms.remove(sym); _upd_env("SYMBOLS",",".join(syms)); _run(f"systemctl restart {SERVICE}")
     return {"status":"removed","symbol":sym,"all_symbols":syms}
 
-class BfReq(BaseModel): symbol:str|None=None; days:int=30
+class BfReq(BaseModel): symbol:str|None=None; days:int=30; limit_per_sec:int=25; market_type:str='spot'
 
 @app.post("/backfill")
 async def backfill(body:BfReq,request:Request):
     _auth(request)
     s=f"--symbols {body.symbol}" if body.symbol else ""
-    _run(f"bash -c 'cd /opt/collector && source venv/bin/activate && nohup python3.11 scripts/sync_history.py {s} --days {body.days} > /opt/collector/logs/backfill.log 2>&1 &'")
+    s_arg = f"--symbols {body.symbol}" if body.symbol else ""
+    mt_arg = f"--market_type {body.market_type}"
+    lr_arg = f"--limit_per_sec {body.limit_per_sec}"
+    script = "clean_backfill.py" if body.market_type == "spot" else "sync_history.py"
+    _run(f"bash -c 'cd /opt/collector && source venv/bin/activate && nohup python3.11 -u scripts/{script} {s_arg} {mt_arg} {lr_arg} > /opt/collector/logs/backfill.log 2>&1 &'")
     return {"status":"started","symbol":body.symbol or "all","days":body.days}
 
 @app.post("/commands/restart/{module}")
