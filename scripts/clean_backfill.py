@@ -5,13 +5,32 @@ Clean spot backfill через /openApi/market/his/v1/kline
 - Батч: 1000 свечей = ~16.6 часов на батч
 - При ошибке: пауза 5 сек и retry x3
 """
-import asyncio, sqlite3, time, sys
+import asyncio, sqlite3, time, sys, hmac, hashlib, os
 from datetime import datetime
 from pathlib import Path
 import aiohttp, certifi, ssl
 
 DB_PATH  = Path("/opt/collector/data/terminal.db")
-HIS_URL  = "https://open-api.bingx.com/openApi/market/his/v1/kline"
+HIS_URL    = "https://open-api.bingx.com/openApi/market/his/v1/kline"
+# Читаем ключи напрямую из .env файла
+def _load_env():
+    key = ""; secret = ""
+    try:
+        env_path = Path("/opt/collector/.env")
+        for line in env_path.read_text().splitlines():
+            if line.startswith("BINGX_API_KEY="):
+                key = line.split("=", 1)[1].strip()
+            elif line.startswith("BINGX_API_SECRET="):
+                secret = line.split("=", 1)[1].strip()
+    except Exception as e:
+        print(f"  .env read error: {e}", flush=True)
+    return key, secret
+
+API_KEY, API_SECRET = _load_env()
+
+def _sign(params: dict) -> str:
+    query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    return hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
 SYMBOLS  = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"]
 BATCH_MS = 1000 * 60 * 1000   # 1000 минут = 16.6 часов
 DELAY    = 0.04                 # 25 запросов/сек (с запасом от 30)

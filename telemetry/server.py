@@ -232,6 +232,10 @@ async def tg_status(request:Request):
 
 class TgCfg(BaseModel): token:str; chat_id:str
 
+class ApiKeyCfg(BaseModel):
+    api_key: str
+    api_secret: str
+
 @app.post("/telegram/config")
 async def tg_cfg(body:TgCfg,request:Request):
     _auth(request); _telegram_config.update({"token":body.token,"chat_id":body.chat_id})
@@ -241,5 +245,29 @@ async def tg_cfg(body:TgCfg,request:Request):
 @app.post("/telegram/test")
 async def tg_test(request:Request):
     _auth(request)
-    ok=await _tg(f"Test VPS {datetime.now().strftime(chr(37)+chr(72)+chr(58)+chr(37)+chr(77)+chr(58)+chr(37)+chr(83))}")
+    ok=await _tg(f"Test VPS {datetime.now().strftime('%H:%M:%S')}")
     return {"sent":ok}
+
+@app.get("/apikeys/status")
+async def apikeys_status(request:Request):
+    _auth(request)
+    key = ""
+    secret = ""
+    try:
+        for l in ENV_PATH.read_text().splitlines():
+            if l.startswith("BINGX_API_KEY="): key = l.split("=",1)[1].strip()
+            if l.startswith("BINGX_API_SECRET="): secret = l.split("=",1)[1].strip()
+    except: pass
+    return {
+        "api_key_set":    bool(key),
+        "api_secret_set": bool(secret),
+        "api_key_prefix": key[:8] + "..." if key else "",
+    }
+
+@app.post("/apikeys/config")
+async def apikeys_config(body:ApiKeyCfg, request:Request):
+    _auth(request)
+    _upd_env("BINGX_API_KEY",    body.api_key)
+    _upd_env("BINGX_API_SECRET", body.api_secret)
+    _run(f"systemctl restart {SERVICE}")
+    return {"status": "configured", "api_key_prefix": body.api_key[:8] + "..."}
