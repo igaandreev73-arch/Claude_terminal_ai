@@ -1,0 +1,12 @@
+[Unit]
+Description=Crypto Terminal - Data Validator and Gap Filler
+After=network.target crypto-collector.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/collector
+EnvironmentFile=/opt/collector/.env
+ExecStart=/opt/collector/venv/bin/python3.11 -u scripts/validate_and_fill.py
+StandardOutput=append:/opt/collector/logs/validation.log
+StandardError=append:/opt/collector/logs/validation.log
