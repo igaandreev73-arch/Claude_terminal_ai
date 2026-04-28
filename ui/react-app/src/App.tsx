@@ -9,9 +9,11 @@ import DataView           from './components/DataView'
 import EventBusMonitor    from './components/EventBusMonitor'
 import StrategiesView     from './components/StrategiesView'
 import PulseView          from './components/PulseView'
+import { useVpsTelemetry } from './hooks/useVpsTelemetry'
 
 export default function App() {
   const { activeTab } = useStore()
+  useVpsTelemetry()  // polling VPS telemetry every 5s
   const { send, startBackfill, stopTask, resumeTask, runValidation, runBacktest, runOptimizer, getBacktestResults, requestPulseState } = useWebSocket()
 
   function openPosition(params: {

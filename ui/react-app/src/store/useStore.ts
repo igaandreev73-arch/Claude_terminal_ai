@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { VpsStatus } from '../hooks/useVpsTelemetry'
 import type { BusEvent, Candle, ExecutionMode, Position, Signal, TradeRecord } from '../types'
 
 // ── Pulse types ────────────────────────────────────────────────────────────────
@@ -230,6 +231,10 @@ interface Store {
   optimizerRunning: Record<string, boolean>
   setOptimizerRunning: (strategyId: string, v: boolean) => void
 
+
+  // ── VPS Telemetry ──────────────────────────────────────────────────────────
+  vpsStatus: VpsStatus | null
+  setVpsStatus: (s: VpsStatus) => void
   // ── Pulse tab ──────────────────────────────────────────────────────────────
   pulseState: PulseState | null
   setPulseState: (s: PulseState) => void
@@ -334,6 +339,8 @@ export const useStore = create<Store>()(persist((set) => ({
   optimizerRunning: {},
   setOptimizerRunning: (id, v) => set((s) => ({ optimizerRunning: { ...s.optimizerRunning, [id]: v } })),
 
+  vpsStatus: null,
+  setVpsStatus: (s) => set({ vpsStatus: s }),
   pulseState: null,
   setPulseState: (s) => set({ pulseState: s }),
   criticalEvents: [],

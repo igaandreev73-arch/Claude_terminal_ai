@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
 import type { ConnectionStatus, ModuleStatus, DataTrustRow, BasisRow } from '../store/useStore'
@@ -131,6 +131,115 @@ function ConnectionsBlock() {
   )
 }
 
+
+// ── Block VPS ─────────────────────────────────────────────────────────────────
+
+function VpsServerBlock() {
+  const vps = useStore((s: any) => s.vpsStatus)
+  const connStatus = vps ? (vps.service?.active ? 'normal' : 'lost') : 'stopped'
+  const connLabel  = vps ? (vps.service?.active ? 'Активен' : 'Не активен') : 'Нет связи'
+
+  function Bar({ pct, warn = 70, crit = 85 }: { pct: number; warn?: number; crit?: number }) {
+    const color = pct >= crit ? '#f87171' : pct >= warn ? 'var(--accent-orange)' : 'var(--accent-green)'
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ width: 60, height: 5, background: 'var(--bg-surface)', borderRadius: 3, overflow: 'hidden' }}>
+          <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: color, borderRadius: 3 }} />
+        </div>
+        <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', color }}>{pct.toFixed(0)}%</span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
+          СЕРВЕР VPS · 132.243.235.173
+        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <StatusDot stage={connStatus} />
+          <span style={{ fontSize: 10, color: STAGE_COLOR[connStatus] ?? 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+            {connLabel}
+          </span>
+        </div>
+      </div>
+
+      {!vps ? (
+        <div style={{ textAlign: 'center', padding: '12px 0', color: 'var(--text-muted)', fontSize: 12 }}>
+          Нет соединения с VPS телеметрией (порт 8800)
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+          {/* System */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>СИСТЕМА</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>CPU</div>
+                <Bar pct={vps.system.cpu_percent} warn={60} crit={85} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
+                  RAM {vps.system.ram_used_mb}/{vps.system.ram_total_mb} MB
+                </div>
+                <Bar pct={vps.system.ram_percent} warn={75} crit={90} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>
+                  Диск (свободно {vps.system.disk_free_gb?.toFixed(1)} GB)
+                </div>
+                <Bar pct={vps.system.disk_percent} warn={70} crit={85} />
+              </div>
+            </div>
+          </div>
+
+          {/* Database */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>БАЗА ДАННЫХ</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {([
+                ['Размер', `${vps.database.size_mb?.toFixed(1)} MB`],
+                ['Свечи',  vps.database.candles?.toLocaleString()],
+                ['Стаканы', vps.database.orderbook_snapshots?.toLocaleString()],
+                ['Ликвидации', vps.database.liquidations?.toLocaleString()],
+              ] as [string, string][]).map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{label}</span>
+                  <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Symbols */}
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', padding: '10px 12px' }}>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>ПАРЫ VPS</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {(vps.data ?? []).map((d: any) => {
+                const last = d.last_candle
+                  ? new Date(d.last_candle).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
+                  : '—'
+                const tc = d.trust_score >= 80
+                  ? 'var(--accent-green)'
+                  : d.trust_score >= 50 ? 'var(--accent-orange)' : '#f87171'
+                return (
+                  <div key={d.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', minWidth: 32 }}>
+                      {d.symbol.replace('/USDT', '')}
+                    </span>
+                    <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{last}</span>
+                    <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: tc }}>{d.trust_score}%</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 // ── Module descriptions ───────────────────────────────────────────────────────
 
 const MODULE_INFO: Record<string, { title: string; body: string }> = {
@@ -615,6 +724,9 @@ export default function PulseView({ onRequestPulse }: PulseViewProps) {
 
         {/* Block 1: Connections — always visible, sticky */}
         <ConnectionsBlock />
+
+        {/* VPS Server block */}
+        <VpsServerBlock />
 
         {/* Row: Modules + Task Queue */}
         <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 14 }}>
