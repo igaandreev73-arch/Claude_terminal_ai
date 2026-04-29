@@ -71,15 +71,17 @@ function ConnectionsBlock() {
   const connected  = useStore(s => s.connected)
   const rl = pulseState?.rate_limit
 
+  const vps = useStore((s: any) => s.vpsStatus)
+  const vpsActive = vps?.service?.active === true
+
   const connections: ConnectionStatus[] = pulseState?.connections ?? [
-    { name: 'ws_ui',         label: 'WebSocket UI',          stage: connected ? 'normal' : 'lost', last_ok_at: null, is_critical: false, market_type: 'internal' },
-    { name: 'spot_ws',       label: 'WS Спот BingX',         stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'spot' },
-    { name: 'futures_ws',    label: 'WS Фьючерсы BingX',     stage: 'stopped', last_ok_at: null, is_critical: true,  market_type: 'futures' },
-    { name: 'spot_rest',     label: 'REST API Спот',          stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'spot' },
-    { name: 'futures_rest',  label: 'REST API Фьючерсы',      stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'futures' },
-    { name: 'local_db',      label: 'Локальная БД',           stage: connected ? 'normal' : 'stopped', last_ok_at: null, is_critical: false, market_type: 'internal' },
-    { name: 'fear_greed',    label: 'Fear & Greed API',       stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'external' },
-    { name: 'news_feed',     label: 'Новостной фид',          stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'external' },
+    { name: 'ws_ui',        label: 'WebSocket UI',       stage: connected ? 'normal' : 'lost',    last_ok_at: null, is_critical: false, market_type: 'internal' },
+    { name: 'spot_ws',      label: 'WS Спот BingX',      stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: false, market_type: 'spot' },
+    { name: 'futures_ws',   label: 'WS Фьючерсы BingX',  stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: true,  market_type: 'futures' },
+    { name: 'vps_server',   label: 'Сервер VPS',         stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: true,  market_type: 'internal' },
+    { name: 'local_db',     label: 'Локальная БД',        stage: connected ? 'normal' : 'stopped', last_ok_at: null, is_critical: false, market_type: 'internal' },
+    { name: 'fear_greed',   label: 'Fear & Greed API',   stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'external' },
+    { name: 'news_feed',    label: 'Новостной фид',       stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'external' },
   ]
 
   return (
@@ -157,7 +159,17 @@ function VpsServerBlock() {
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
           СЕРВЕР VPS · 132.243.235.173
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {vps?.telegram_ok != null && (
+            <span style={{ fontSize: 10, color: vps.telegram_ok ? 'var(--accent-green)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              {vps.telegram_ok ? '🔔 TG' : '🔕 TG'}
+            </span>
+          )}
+          {vps?.timestamp && (
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              {new Date(vps.timestamp).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
           <StatusDot stage={connStatus} />
           <span style={{ fontSize: 10, color: STAGE_COLOR[connStatus] ?? 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
             {connLabel}
@@ -217,19 +229,27 @@ function VpsServerBlock() {
             <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 8 }}>ПАРЫ VPS</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {(vps.data ?? []).map((d: any) => {
-                const last = d.last_candle
-                  ? new Date(d.last_candle).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
+                // Реальный trust: давность последней свечи (ISO строка = UTC)
+                const lastMs  = d.last_candle ? new Date(d.last_candle + 'Z').getTime() : null
+                const ageMin  = lastMs ? (Date.now() - lastMs) / 60000 : null
+                const fresh   = ageMin != null && ageMin < 3
+                const stale   = ageMin != null && ageMin > 10
+                const ageStr  = ageMin != null
+                  ? (ageMin < 1 ? '<1м' : ageMin < 60 ? `${Math.floor(ageMin)}м` : `${Math.floor(ageMin/60)}ч`)
                   : '—'
-                const tc = d.trust_score >= 80
-                  ? 'var(--accent-green)'
-                  : d.trust_score >= 50 ? 'var(--accent-orange)' : '#f87171'
+                const tc = fresh ? 'var(--accent-green)' : stale ? '#f87171' : 'var(--accent-orange)'
                 return (
                   <div key={d.symbol} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', minWidth: 32 }}>
                       {d.symbol.replace('/USDT', '')}
                     </span>
-                    <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{last}</span>
-                    <span style={{ fontSize: 10, fontFamily: 'var(--font-mono)', fontWeight: 700, color: tc }}>{d.trust_score}%</span>
+                    <span style={{ fontSize: 9, color: tc, fontFamily: 'var(--font-mono)' }}>{ageStr}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                      <div style={{ width: 28, height: 3, background: 'var(--bg-elevated)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{ width: `${Math.min(100, d.trust_score)}%`, height: '100%', background: tc, borderRadius: 2 }} />
+                      </div>
+                      <span style={{ fontSize: 9, fontFamily: 'var(--font-mono)', color: tc }}>{d.trust_score}%</span>
+                    </div>
                   </div>
                 )
               })}
@@ -507,9 +527,26 @@ const TRUST_COLOR = (score: number) =>
 
 function DataStatusBlock() {
   const pulseState = useStore(s => s.pulseState)
-  const dbStats    = useStore(s => s.dbStats)
+  const vps        = useStore((s: any) => s.vpsStatus)
   const rows: DataTrustRow[] = pulseState?.data_rows ?? []
   const basis: BasisRow[] = pulseState?.basis ?? []
+
+  // Если нет локальных данных — строим из VPS
+  const vpsRows = (!rows.length && vps?.data) ? vps.data.map((d: any) => ({
+    symbol: d.symbol,
+    timeframe: '1m',
+    market_type: 'spot',
+    last_candle_at: d.last_candle ? new Date(d.last_candle).getTime() : null,
+    gaps_24h: 0,
+    verification_status: d.trust_score >= 80 ? 'ok' : 'warning',
+    trust_score: d.trust_score,
+    size_mb: 0,
+    candles: d.candles,
+    ob_snapshots: d.ob_snapshots,
+    liquidations: d.liquidations,
+  })) : []
+
+  const displayRows = rows.length ? rows : vpsRows
 
   return (
     <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
@@ -549,7 +586,7 @@ function DataStatusBlock() {
       )}
 
       {/* Data rows */}
-      {rows.length > 0 ? (
+      {displayRows.length > 0 ? (
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-subtle)' }}>
@@ -559,7 +596,7 @@ function DataStatusBlock() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {displayRows.map((r: any, i: number) => (
               <tr key={i} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                 <td style={{ padding: '5px 6px', color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{r.symbol}</td>
                 <td style={{ padding: '5px 6px', textAlign: 'right', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{r.timeframe}</td>
@@ -582,9 +619,7 @@ function DataStatusBlock() {
         </table>
       ) : (
         <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-muted)', fontSize: 12 }}>
-          {dbStats
-            ? `${dbStats.candles.length} пар в БД — запросите pulse_state для деталей`
-            : 'Данные не получены'}
+          {vps ? `VPS: ${vps.database?.candles?.toLocaleString()} свечей, ${vps.database?.orderbook_snapshots?.toLocaleString()} стаканов` : 'Данные не получены'}
         </div>
       )}
     </div>
