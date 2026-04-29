@@ -74,6 +74,7 @@ function ConnectionsBlock() {
   const vps = useStore((s: any) => s.vpsStatus)
   const vpsActive = vps?.service?.active === true
 
+  // Обновляем vps_server статус из vpsStatus (backend не знает о VPS)
   const connections: ConnectionStatus[] = pulseState?.connections ?? [
     { name: 'ws_ui',        label: 'WebSocket UI',       stage: connected ? 'normal' : 'lost',    last_ok_at: null, is_critical: false, market_type: 'internal' },
     { name: 'spot_ws',      label: 'WS Спот BingX',      stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: false, market_type: 'spot' },
