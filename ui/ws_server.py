@@ -679,7 +679,7 @@ class WSServer:
         connections = [
             {"name": "ws_ui",        "label": "WebSocket UI",       "stage": ws_ui_stage, "last_ok_at": now_ts, "is_critical": False, "market_type": "internal"},
             {"name": "spot_rest",    "label": "REST API Спот",       "stage": rest_stage,  "last_ok_at": now_ts if rest_stage == "normal" else None, "is_critical": False, "market_type": "spot"},
-            {"name": "futures_rest", "label": "REST API Фьючерсы",   "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "futures"},
+            # futures_rest не реализован — фьючерсные данные получаем через WS (futures_ws)
             {"name": "local_db",     "label": "Локальная БД",        "stage": db_stage,    "last_ok_at": now_ts,  "is_critical": True,  "market_type": "internal"},
             {"name": "fear_greed",   "label": "Fear & Greed API",    "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "external"},
             {"name": "news_feed",    "label": "Новостной фид",       "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "external"},

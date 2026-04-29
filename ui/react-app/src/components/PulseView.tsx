@@ -66,6 +66,44 @@ function StatusDot({ stage }: { stage: string }) {
   )
 }
 
+
+// ── Connection descriptions ───────────────────────────────────────────────────
+
+const CONNECTION_INFO: Record<string, { title: string; body: string }> = {
+  ws_ui: {
+    title: 'WebSocket UI — интерфейс терминала',
+    body: 'Соединение между браузером и локальным Python-сервером (ws://localhost:8765). Через него UI получает тики цен, события, pulse_state. Если соединение потеряно — UI показывает устаревшие данные, новые события не приходят.',
+  },
+  spot_ws: {
+    title: 'WS Спот BingX — спотовый WebSocket',
+    body: 'Постоянное WebSocket-соединение с BingX Spot API (VPS). Подписан на потоки: свечи 1m, стакан orderbook, поток сделок. Публикует события candle.1m.tick и candle.1m.closed. Если упал — пропущенный поток сделок не восстановить (невосстанавливаемые данные).',
+  },
+  futures_ws: {
+    title: 'WS Фьючерсы BingX — фьючерсный WebSocket',
+    body: 'WebSocket-соединение с BingX Futures API (VPS). Собирает фьючерсные свечи, стакан, поток сделок и ликвидации. Ликвидации — критически невосстанавливаемые данные: если соединение упало, пропущенные ликвидации уже не получить.',
+  },
+  vps_server: {
+    title: 'Сервер VPS — удалённый сборщик данных',
+    body: 'Удалённый сервер (132.243.235.173) работает круглосуточно и собирает рыночные данные. Телеметрия доступна на порту 8800. Локальная машина получает данные от VPS для анализа и торговли. Если VPS недоступен — сбор данных прекращается.',
+  },
+  local_db: {
+    title: 'Локальная БД — SQLite база данных',
+    body: 'SQLite база данных на локальной машине. Хранит кэш свечей, состояние стратегий, историю сигналов и сделок. Основное хранилище на VPS — PostgreSQL. Если БД недоступна — бэктест и аналитика не работают.',
+  },
+  spot_rest: {
+    title: 'REST API Спот — HTTP клиент BingX Spot',
+    body: 'HTTP клиент для запросов к BingX Spot REST API. Используется для: получения исторических свечей, проверки баланса, размещения ордеров. Rate limit: 100 запросов/10 сек для публичных, 2000/10 сек для приватных эндпоинтов.',
+  },
+  fear_greed: {
+    title: 'Fear & Greed API — индекс страха и жадности',
+    body: 'Внешний API (alternative.me) для получения индекса Fear & Greed криптовалютного рынка. Значение 0-25 — экстремальный страх (возможность для покупки), 75-100 — жадность (риск коррекции). Не реализован в текущей версии.',
+  },
+  news_feed: {
+    title: 'Новостной фид — агрегатор новостей',
+    body: 'Агрегатор крипто-новостей (CryptoPanic или аналог). Используется для: мониторинга новостей по торгуемым парам, фильтрации по тональности, алертов на важные события. Не реализован в текущей версии.',
+  },
+}
+
 function ConnectionsBlock() {
   const pulseState = useStore(s => s.pulseState)
   const connected  = useStore(s => s.connected)
@@ -73,6 +111,8 @@ function ConnectionsBlock() {
 
   const vps = useStore((s: any) => s.vpsStatus)
   const vpsActive = vps?.service?.active === true
+
+  const [activePopover, setActivePopover] = useState<string | null>(null)
 
   const connections: ConnectionStatus[] = pulseState?.connections ?? [
     { name: 'ws_ui',        label: 'WebSocket UI',       stage: connected ? 'normal' : 'lost',    last_ok_at: null, is_critical: false, market_type: 'internal' },
@@ -85,7 +125,7 @@ function ConnectionsBlock() {
   ]
 
   return (
-    <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
+    <div onClick={() => setActivePopover(null)} style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
           СОЕДИНЕНИЯ
@@ -111,7 +151,7 @@ function ConnectionsBlock() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
         {connections.map(c => (
           <div key={c.name} style={{
-            display: 'flex', alignItems: 'center', gap: 8,
+            position: 'relative', display: 'flex', alignItems: 'center', gap: 8,
             background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)',
             padding: '7px 10px', border: `1px solid ${STAGE_COLOR[c.stage] ?? 'var(--border-subtle)'}22`,
           }}>
@@ -126,6 +166,32 @@ function ConnectionsBlock() {
                 {c.last_ok_at ? <span style={{ color: 'var(--text-muted)', marginLeft: 4 }}>{ago(c.last_ok_at)}</span> : null}
               </div>
             </div>
+            {CONNECTION_INFO[c.name] && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setActivePopover(activePopover === c.name ? null : c.name) }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1, borderRadius: 3, flexShrink: 0 }}
+                title={CONNECTION_INFO[c.name].title}
+              >ⓘ</button>
+            )}
+            {activePopover === c.name && CONNECTION_INFO[c.name] && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position: 'absolute', top: '100%', left: 0, zIndex: 100,
+                  width: 280, marginTop: 4,
+                  background: 'var(--bg-overlay)', border: '1px solid var(--border-subtle)',
+                  borderRadius: 'var(--radius-md)', padding: '12px 14px',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 6 }}>
+                  {CONNECTION_INFO[c.name].title}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  {CONNECTION_INFO[c.name].body}
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
