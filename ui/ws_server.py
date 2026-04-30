@@ -668,7 +668,6 @@ class WSServer:
 
         # Синтетические соединения которые Watchdog не отслеживает
         ws_ui_stage = "normal" if list(self._clients) else "lost"
-        rest_stage  = "normal" if self._rest_client else "stopped"
         db_stage    = "normal"  # если мы отвечаем — БД доступна
         try:
             from storage.database import get_session_factory
@@ -676,11 +675,17 @@ class WSServer:
         except Exception:
             db_stage = "lost"
 
+        # В режиме terminal BingX WS не запускаются на Desktop — данные идут через VPS.
+        # VPS соединения (vps_ws, vps_server, vps_db) определяются на фронтенде через polling useVpsTelemetry.
+        # stage="unknown" — фронтенд переопределит из vpsStatus.
+        # bingx_private — заглушка, реальный статус от Execution Engine.
         connections = [
             {"name": "ws_ui",        "label": "WebSocket UI",       "stage": ws_ui_stage, "last_ok_at": now_ts, "is_critical": False, "market_type": "internal"},
-            {"name": "spot_rest",    "label": "REST API Спот",       "stage": rest_stage,  "last_ok_at": now_ts if rest_stage == "normal" else None, "is_critical": False, "market_type": "spot"},
-            # futures_rest не реализован — фьючерсные данные получаем через WS (futures_ws)
+            {"name": "vps_ws",       "label": "WebSocket VPS",      "stage": "unknown",   "last_ok_at": None,    "is_critical": True,  "market_type": "internal"},
+            {"name": "vps_server",   "label": "Сервер VPS",         "stage": "unknown",   "last_ok_at": None,    "is_critical": True,  "market_type": "internal"},
+            {"name": "vps_db",       "label": "БД VPS",             "stage": "unknown",   "last_ok_at": None,    "is_critical": True,  "market_type": "internal"},
             {"name": "local_db",     "label": "Локальная БД",        "stage": db_stage,    "last_ok_at": now_ts,  "is_critical": True,  "market_type": "internal"},
+            {"name": "bingx_private", "label": "BingX Private API",  "stage": "stopped",   "last_ok_at": None,    "is_critical": True,  "market_type": "external"},
             {"name": "fear_greed",   "label": "Fear & Greed API",    "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "external"},
             {"name": "news_feed",    "label": "Новостной фид",       "stage": "stopped",   "last_ok_at": None,    "is_critical": False, "market_type": "external"},
         ]
