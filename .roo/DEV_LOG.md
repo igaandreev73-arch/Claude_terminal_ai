@@ -125,3 +125,13 @@
 - **Файлы:** `ui/ws_server.py` (добавлена статика), `plans/full-execution-plan.md`, `plans/roadmap-next-steps.md`
 - **Тесты:** 203/203 пройдены
 - **Статус:** ✅ Готово
+
+## [UI] VPS Settings — модалка + параметризация — 2026-04-30
+- **Время:** 14:00-14:10 MSK
+- **Что сделано:**
+  - Исправлен `useVpsTelemetry.ts` — теперь читает `vpsConfig` из store и передаёт в `fetchVpsStatus(url, apiKey)`
+  - `ChartView.tsx` — заменён жёстко закодированный `REST_BASE` на `fetchVpsCandles(vpsConfig, ...)` с преобразованием `OHLCVBar.open_time` (ms) → `Candle.time` (s)
+  - Фронтенд пересобран: `npm run build` — 0 ошибок
+- **Файлы:** `ui/react-app/src/hooks/useVpsTelemetry.ts`, `ui/react-app/src/components/ChartView.tsx`
+- **Тесты:** сборка прошла успешно
+- **Статус:** ✅ Готово

@@ -1,19 +1,18 @@
-﻿/**
+/**
  * useVpsTelemetry — polling VPS telemetry every 5 seconds.
  * Также предоставляет функцию для получения свечей с VPS REST API.
+ * Адрес сервера и API-ключ берутся из useStore.vpsConfig.
  */
 import { useEffect, useRef } from 'react'
-import { useStore } from '../store/useStore'
+import { useStore, type VpsConfig } from '../store/useStore'
 
-const VPS_URL  = 'http://132.243.235.173:8800'
-const VPS_KEY  = 'vps_telemetry_key_2026'
 const INTERVAL = 5000
 
-async function fetchVpsStatus(): Promise<VpsStatus | null> {
+async function fetchVpsStatus(url: string, apiKey: string): Promise<VpsStatus | null> {
   const ctrl  = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 6000)
   try {
-    const res = await fetch(`${VPS_URL}/status?api_key=${VPS_KEY}`, { signal: ctrl.signal })
+    const res = await fetch(`${url}/status?api_key=${apiKey}`, { signal: ctrl.signal })
     clearTimeout(timer)
     if (!res.ok) return null
     return await res.json() as VpsStatus
@@ -25,14 +24,16 @@ async function fetchVpsStatus(): Promise<VpsStatus | null> {
 
 /**
  * Запрашивает свечи напрямую с VPS REST API.
- * Используется как fallback, если локальный WS сервер недоступен.
+ * Принимает конфиг VPS для гибкости (может быть из store или передан вручную).
  */
 export async function fetchVpsCandles(
+  config: VpsConfig,
   symbol: string,
   tf: string,
   limit: number = 500,
   marketType: string = 'spot',
 ): Promise<OHLCVBar[] | null> {
+  const baseUrl = `http://${config.host}:${config.port}`
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 10000)
   try {
@@ -40,7 +41,7 @@ export async function fetchVpsCandles(
       symbol, tf, limit: String(limit), market_type: marketType,
     })
     const res = await fetch(
-      `${VPS_URL}/api/candles?api_key=${VPS_KEY}&${params}`,
+      `${baseUrl}/api/candles?api_key=${config.apiKey}&${params}`,
       { signal: ctrl.signal },
     )
     clearTimeout(timer)
@@ -104,14 +105,17 @@ export interface OHLCVBar {
 
 export function useVpsTelemetry() {
   const setVpsStatus = useStore((s: any) => s.setVpsStatus)
+  const vpsConfig = useStore((s: any) => s.vpsConfig)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    fetchVpsStatus().then(data => { if (data) setVpsStatus(data) })
+    const url = `http://${vpsConfig.host}:${vpsConfig.port}`
+
+    fetchVpsStatus(url, vpsConfig.apiKey).then(data => { if (data) setVpsStatus(data) })
     timerRef.current = setInterval(async () => {
-      const data = await fetchVpsStatus()
+      const data = await fetchVpsStatus(url, vpsConfig.apiKey)
       if (data) setVpsStatus(data)
     }, INTERVAL)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [])
+  }, [vpsConfig.host, vpsConfig.port, vpsConfig.apiKey, setVpsStatus])
 }

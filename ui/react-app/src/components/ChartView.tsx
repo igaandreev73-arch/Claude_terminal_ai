@@ -4,8 +4,7 @@ import {
   CrosshairMode, UTCTimestamp,
 } from 'lightweight-charts'
 import { useStore } from '../store/useStore'
-
-const REST_BASE = 'http://localhost:8765'
+import { fetchVpsCandles } from '../hooks/useVpsTelemetry'
 
 const SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT']
 const TFS     = ['1m', '5m', '15m', '1h', '4h', '1d']
@@ -25,6 +24,7 @@ export default function ChartView() {
   const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeRef    = useRef<ISeriesApi<'Histogram'> | null>(null)
   const { chartSymbol, chartTf, setChartSymbol, setChartTf } = useStore()
+  const vpsConfig = useStore(s => s.vpsConfig)
   const key = `${chartSymbol}:${chartTf}`
 
   // Selectors — subscribe to only the data we need to redraw
@@ -95,22 +95,28 @@ export default function ChartView() {
     return () => { ro.disconnect(); chart.remove() }
   }, [])
 
-  // ── Fetch historical candles via REST ────────────────────────────────────────
+  // ── Fetch historical candles via VPS REST API ────────────────────────────────
   const fetchCandles = useCallback(async (symbol: string, tf: string) => {
     setLoading(true)
     try {
-      const params = new URLSearchParams({ symbol, tf, limit: '500' })
-      const res = await fetch(`${REST_BASE}/api/candles?${params}`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = await res.json() as { candles: OHLCVBar[]; symbol: string; tf: string }
-      const key = `${json.symbol}:${json.tf}`
-      useStore.getState().setHistoricalCandles(key, json.candles)
+      const raw = await fetchVpsCandles(vpsConfig, symbol, tf, 500, 'spot')
+      if (raw) {
+        // OHLCVBar.open_time (ms) → Candle.time (s)
+        const candles = raw.map(c => ({
+          time: Math.floor(c.open_time / 1000) as UTCTimestamp,
+          open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume,
+        }))
+        const key = `${symbol}:${tf}`
+        useStore.getState().setHistoricalCandles(key, candles)
+      } else {
+        console.warn('ChartView: VPS не вернул свечи для', symbol, tf)
+      }
     } catch (e) {
-      console.error('Ошибка загрузки свечей:', e)
+      console.error('Ошибка загрузки свечей с VPS:', e)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [vpsConfig])
 
   // ── Request data when symbol/tf changes ──────────────────────────────────────
   useEffect(() => {
