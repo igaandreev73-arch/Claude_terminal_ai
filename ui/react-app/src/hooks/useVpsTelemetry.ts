@@ -1,5 +1,6 @@
 ﻿/**
  * useVpsTelemetry — polling VPS telemetry every 5 seconds.
+ * Также предоставляет функцию для получения свечей с VPS REST API.
  */
 import { useEffect, useRef } from 'react'
 import { useStore } from '../store/useStore'
@@ -16,6 +17,36 @@ async function fetchVpsStatus(): Promise<VpsStatus | null> {
     clearTimeout(timer)
     if (!res.ok) return null
     return await res.json() as VpsStatus
+  } catch {
+    clearTimeout(timer)
+    return null
+  }
+}
+
+/**
+ * Запрашивает свечи напрямую с VPS REST API.
+ * Используется как fallback, если локальный WS сервер недоступен.
+ */
+export async function fetchVpsCandles(
+  symbol: string,
+  tf: string,
+  limit: number = 500,
+  marketType: string = 'spot',
+): Promise<OHLCVBar[] | null> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 10000)
+  try {
+    const params = new URLSearchParams({
+      symbol, tf, limit: String(limit), market_type: marketType,
+    })
+    const res = await fetch(
+      `${VPS_URL}/api/candles?api_key=${VPS_KEY}&${params}`,
+      { signal: ctrl.signal },
+    )
+    clearTimeout(timer)
+    if (!res.ok) return null
+    const json = await res.json() as { candles: OHLCVBar[] }
+    return json.candles
   } catch {
     clearTimeout(timer)
     return null
@@ -59,6 +90,16 @@ export interface VpsStatus {
   data:        VpsSymbolData[]
   symbols:     string[]
   telegram_ok: boolean
+}
+
+export interface OHLCVBar {
+  open_time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  is_closed?: boolean
 }
 
 export function useVpsTelemetry() {

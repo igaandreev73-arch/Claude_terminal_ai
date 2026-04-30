@@ -1,0 +1,110 @@
+# Журнал разработки - 2026-04-29
+
+## [Шаг 3-4] WS endpoint + /api/candles в telemetry/server.py
+- **Время:** 17:40-17:42
+- **Что сделано:**
+  - Переписан `telemetry/server.py` с использованием lifespan (вместо устаревшего on_event)
+  - Добавлен WS endpoint `/ws` с аутентификацией (X-API-Key в query или JSON)
+  - Добавлена фоновая задача `_broadcast_loop()` — подписка на Event Bus VPS и трансляция событий Desktop'у
+  - Добавлен REST endpoint `GET /api/candles` для исторических данных
+  - Добавлена функция `set_event_bus()` для подключения Event Bus из main.py
+  - Добавлена функция `_serialise()` для JSON-сериализации данных
+  - Добавлен `BROADCAST_EVENTS` — набор событий, транслируемых Desktop'у
+  - WS поддерживает: auth, ping/pong, get_state, авто-реконнект
+- **Файлы:** `telemetry/server.py`, `telemetry/server.tmp.py` (удалён)
+- **Тесты:** 203/203 пройдены
+- **Статус:** Готово
+
+## [Шаг 5] Создать data/vps_client.py
+- **Время:** 17:43
+- **Что сделано:**
+  - Создан `VPSClient` — клиент Desktop для подключения к VPS
+  - WS подключение к VPS :8800/ws с авто-реконнектом (экспоненциальная задержка)
+  - Публикация событий VPS в локальный Event Bus Desktop'а
+  - REST методы: get_candles(), get_status(), get_data_status(), get_health(), get_symbols(), start_backfill()
+  - Ping-задача для поддержания WS соединения
+  - Поддержка raw-подписчиков (on_raw_event)
+- **Файлы:** `data/vps_client.py` (новый)
+- **Тесты:** 203/203 пройдены
+- **Статус:** Готово
+
+## [Шаг 6] Рефакторинг main.py — два режима (collector/terminal)
+- **Время:** 17:43-17:44
+- **Что сделано:**
+  - `main.py` разделён на две функции: `_run_collector()` и `_run_terminal()`
+  - **collector (VPS):** Data Layer + Telemetry API (FastAPI через uvicorn внутри asyncio)
+  - **terminal (Desktop):** VPSClient + Analytics + Signals + Execution + UI
+  - Используется `get_config()` из `core/config.py` для всех настроек
+  - Импорты модулей — локальные (внутри функций) для избежания лишних зависимостей
+- **Файлы:** `main.py`, `main.tmp.py` (удалён)
+- **Тесты:** 203/203 пройдены
+- **Статус:** Готово
+
+## [Шаг 7] Обновить ui/ws_server.py
+- **Время:** 17:44
+- **Что сделано:**
+  - Проверено: WSServer уже корректно обрабатывает None для rest_client, watchdog, basis_calculator, data_verifier, ws_client, futures_ws
+  - Изменений не потребовалось
+- **Файлы:** `ui/ws_server.py` (без изменений)
+- **Тесты:** 203/203 пройдены
+- **Статус:** Готово
+
+## [Шаг 8] Обновить фронтенд
+- **Время:** 17:44-17:59
+- **Что сделано:**
+  - `useVpsTelemetry.ts` — добавлена функция `fetchVpsCandles()` для прямого получения свечей с VPS REST API
+  - Добавлен интерфейс `OHLCVBar` для типизации свечей
+  - ChartView.tsx продолжает использовать локальный `localhost:8765` (данные в локальной БД Desktop)
+- **Файлы:** `ui/react-app/src/hooks/useVpsTelemetry.ts`
+- **Тесты:** 203/203 пройдены
+- **Статус:** Готово
+
+## [Шаг 9] Обновить deploy/ файлы
+- **Время:** 17:59
+- **Что сделано:**
+  - `crypto-telemetry.service` обновлён для запуска `main.py` в режиме collector
+  - Добавлена переменная `RUN_MODE=collector` в Environment сервиса
+  - Watchdog и Validator сервисы остались без изменений
+- **Файлы:** `deploy/crypto-telemetry.service`
+- **Тесты:** 203/203 пройдены
+- **Статус:** Готово
+
+## [Шаг 10] Проверить тесты
+- **Время:** 17:59-18:01
+- **Что сделано:** Запущены все 203 unit-теста
+- **Результат:** 203 passed, 0 failed
+- **Статус:** Готово
+
+## [Финальная проверка] 2026-04-30 06:30 MSK
+- **Что сделано:**
+  - Проверена архитектура: все 10 шагов миграции выполнены
+  - `core/config.py` — AppConfig с RUN_MODE, VPS_HOST/PORT/API_KEY, is_collector/is_terminal, vps_url/vps_ws_url
+  - `telemetry/server.py` — WS /ws (auth, ping/pong, get_state, broadcast loop) + REST /api/candles + set_event_bus()
+  - `data/vps_client.py` — VPSClient: WS connect с авто-реконнектом, REST методы, публикация в Event Bus
+  - `main.py` — _run_collector() (Data Layer + uvicorn) и _run_terminal() (VPSClient + Analytics + Execution + UI)
+  - `ui/ws_server.py` — список соединений обновлён (vps_ws, vps_server, vps_db, bingx_private)
+  - `PulseView.tsx` — fallback connections: ws_ui, vps_ws⚡, vps_server⚡, vps_db⚡, local_db, bingx_private⚡, fear_greed, news_feed
+  - `useVpsTelemetry.ts` — добавлена fetchVpsCandles() для прямого REST к VPS
+  - `deploy/crypto-telemetry.service` — RUN_MODE=collector
+- **Тесты:** 203/203 пройдены (100%)
+- **Статус:** ✅ Миграция завершена
+
+## [Fix] Синхронизация блока "Соединения" на вкладке "Пульс" — 2026-04-30
+- **Время:** 06:41-06:47
+- **Что сделано:**
+  - Исправлена рассинхронизация между pulseState.connections (с бэкенда) и vpsStatus (polling VPS)
+  - В `ConnectionsBlock()` добавлен мерж: VPS-соединения (vps_ws, vps_server, vps_db) берут stage из vpsActive
+  - `local_db` берёт stage из connected (WS UI)
+  - В `ui/ws_server.py` stage для VPS-соединений изменён с "stopped" на "unknown" (определяется на фронтенде)
+  - Добавлен stage "unknown" с цветом var(--text-muted) и label "Ожидание"
+- **Результат визуальной проверки:**
+  - WebSocket UI: `Норма` ✅ (раньше было `Нет связи`)
+  - WebSocket VPS: `Нет связи` ✅ (VPS недоступен — корректно)
+  - Сервер VPS: `Остановлен` ✅ (корректно)
+  - БД VPS: `Остановлен` ✅ (корректно)
+  - Локальная БД: `Норма` ✅ (раньше было `Остановлен`)
+  - Rate Limit: `0/2400` ✅ (раньше не отображался)
+  - Кнопка "↺ Обновить" активна ✅
+- **Файлы:** `ui/react-app/src/components/PulseView.tsx`, `ui/ws_server.py`
+- **Тесты:** 203/203 пройдены
+- **Статус:** ✅ Готово

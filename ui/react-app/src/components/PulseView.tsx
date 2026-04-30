@@ -26,6 +26,7 @@ const STAGE_COLOR: Record<string, string> = {
   lost:     '#f87171',
   dead:     '#ef4444',
   stopped:  'var(--text-muted)',
+  unknown:  'var(--text-muted)',
 }
 
 const STAGE_LABEL: Record<string, string> = {
@@ -34,6 +35,7 @@ const STAGE_LABEL: Record<string, string> = {
   lost:     'Нет связи',
   dead:     'Мёртв',
   stopped:  'Остановлен',
+  unknown:  'Ожидание',
 }
 
 const MODULE_STATUS_COLOR: Record<string, string> = {
@@ -74,25 +76,25 @@ const CONNECTION_INFO: Record<string, { title: string; body: string }> = {
     title: 'WebSocket UI — интерфейс терминала',
     body: 'Соединение между браузером и локальным Python-сервером (ws://localhost:8765). Через него UI получает тики цен, события, pulse_state. Если соединение потеряно — UI показывает устаревшие данные, новые события не приходят.',
   },
-  spot_ws: {
-    title: 'WS Спот BingX — спотовый WebSocket',
-    body: 'Постоянное WebSocket-соединение с BingX Spot API (VPS). Подписан на потоки: свечи 1m, стакан orderbook, поток сделок. Публикует события candle.1m.tick и candle.1m.closed. Если упал — пропущенный поток сделок не восстановить (невосстанавливаемые данные).',
-  },
-  futures_ws: {
-    title: 'WS Фьючерсы BingX — фьючерсный WebSocket',
-    body: 'WebSocket-соединение с BingX Futures API (VPS). Собирает фьючерсные свечи, стакан, поток сделок и ликвидации. Ликвидации — критически невосстанавливаемые данные: если соединение упало, пропущенные ликвидации уже не получить.',
+  vps_ws: {
+    title: 'WebSocket VPS — канал реалтайм-данных',
+    body: 'Постоянное WebSocket-соединение с VPS-сервером (ws://132.243.235.173:8800/ws). Через него Desktop получает все рыночные события: свечи, стакан, ликвидации, watchdog-статусы. Если соединение потеряно — реалтайм данные не поступают, но история доступна через REST.',
   },
   vps_server: {
     title: 'Сервер VPS — удалённый сборщик данных',
-    body: 'Удалённый сервер (132.243.235.173) работает круглосуточно и собирает рыночные данные. Телеметрия доступна на порту 8800. Локальная машина получает данные от VPS для анализа и торговли. Если VPS недоступен — сбор данных прекращается.',
+    body: 'Удалённый сервер (132.243.235.173) работает круглосуточно и собирает рыночные данные с BingX. Telemetry API доступен на порту 8800. Desktop получает от VPS данные через WS (реалтайм) и REST (история). Если VPS недоступен — терминал работает офлайн с последним кэшем.',
+  },
+  vps_db: {
+    title: 'БД VPS — SQLite база данных на сервере',
+    body: 'SQLite база данных на VPS-сервере. Хранит все исторические данные: свечи 1m, снимки стакана, ликвидации, метрики фьючерсов. Desktop запрашивает историю через REST API /api/candles. Если БД недоступна — исторические данные не загружаются.',
   },
   local_db: {
-    title: 'Локальная БД — SQLite база данных',
-    body: 'SQLite база данных на локальной машине. Хранит кэш свечей, состояние стратегий, историю сигналов и сделок. Основное хранилище на VPS — PostgreSQL. Если БД недоступна — бэктест и аналитика не работают.',
+    title: 'Локальная БД — SQLite кэш на Desktop',
+    body: 'SQLite база данных на локальной машине. Хранит кэш свечей, состояние стратегий, историю сигналов и сделок. Наполняется через VPS Client. Если БД недоступна — бэктест и аналитика не работают.',
   },
-  spot_rest: {
-    title: 'REST API Спот — HTTP клиент BingX Spot',
-    body: 'HTTP клиент для запросов к BingX Spot REST API. Используется для: получения исторических свечей, проверки баланса, размещения ордеров. Rate limit: 100 запросов/10 сек для публичных, 2000/10 сек для приватных эндпоинтов.',
+  bingx_private: {
+    title: 'BingX Private API — торговый API',
+    body: 'Прямое HTTP-соединение с BingX Private API (только с Desktop). Используется для: открытия/закрытия ордеров, проверки баланса, получения статуса позиций. API-ключ хранится только локально, на VPS его нет. Если недоступен — торговля невозможна.',
   },
   fear_greed: {
     title: 'Fear & Greed API — индекс страха и жадности',
@@ -114,15 +116,32 @@ function ConnectionsBlock() {
 
   const [activePopover, setActivePopover] = useState<string | null>(null)
 
-  const connections: ConnectionStatus[] = pulseState?.connections ?? [
+  // Базовый список из pulseState (с бэкенда) или fallback
+  const baseConnections: ConnectionStatus[] = pulseState?.connections ?? [
     { name: 'ws_ui',        label: 'WebSocket UI',       stage: connected ? 'normal' : 'lost',    last_ok_at: null, is_critical: false, market_type: 'internal' },
-    { name: 'spot_ws',      label: 'WS Спот BingX',      stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: false, market_type: 'spot' },
-    { name: 'futures_ws',   label: 'WS Фьючерсы BingX',  stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: true,  market_type: 'futures' },
+    { name: 'vps_ws',       label: 'WebSocket VPS',      stage: vpsActive ? 'normal' : 'lost',    last_ok_at: null, is_critical: true,  market_type: 'internal' },
     { name: 'vps_server',   label: 'Сервер VPS',         stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: true,  market_type: 'internal' },
+    { name: 'vps_db',       label: 'БД VPS',             stage: vpsActive ? 'normal' : 'stopped', last_ok_at: null, is_critical: true,  market_type: 'internal' },
     { name: 'local_db',     label: 'Локальная БД',        stage: connected ? 'normal' : 'stopped', last_ok_at: null, is_critical: false, market_type: 'internal' },
+    { name: 'bingx_private',label: 'BingX Private API',  stage: 'stopped', last_ok_at: null, is_critical: true,  market_type: 'external' },
     { name: 'fear_greed',   label: 'Fear & Greed API',   stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'external' },
     { name: 'news_feed',    label: 'Новостной фид',       stage: 'stopped', last_ok_at: null, is_critical: false, market_type: 'external' },
   ]
+
+  // Мерж: переопределяем stage для VPS-соединений из vpsStatus (локальный polling)
+  // и для local_db из connected (WS UI)
+  const connections = baseConnections.map(c => {
+    if (c.name === 'vps_ws') {
+      return { ...c, stage: vpsActive ? 'normal' : 'lost' }
+    }
+    if (c.name === 'vps_server' || c.name === 'vps_db') {
+      return { ...c, stage: vpsActive ? 'normal' : 'stopped' }
+    }
+    if (c.name === 'local_db') {
+      return { ...c, stage: connected ? 'normal' : 'stopped' }
+    }
+    return c
+  })
 
   return (
     <div onClick={() => setActivePopover(null)} style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
