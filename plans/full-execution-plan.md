@@ -107,16 +107,12 @@ pip install -r requirements.txt
 
 ### Шаг 1.3 — Создать .env на VPS
 
+> **Важно:** BingX API-ключи НЕ НУЖНЫ на VPS. Все публичные данные (свечи, стакан, сделки) BingX отдаёт без аутентификации. Ключи требуются только на Desktop для `BingXPrivateClient` (исполнение ордеров).
+
 Файл `/opt/collector/.env`:
 
 ```ini
 RUN_MODE=collector
-
-# BingX Public API (read-only — только для сбора данных)
-BINGX_API_KEY=<public_spot_key>
-BINGX_API_SECRET=<public_spot_secret>
-BINGX_FUTURES_API_KEY=<public_futures_key>
-BINGX_FUTURES_API_SECRET=<public_futures_secret>
 
 # VPS API Key (для аутентификации Desktop → VPS)
 VPS_API_KEY=vps_telemetry_key_2026

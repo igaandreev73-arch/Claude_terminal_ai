@@ -1,7 +1,8 @@
-﻿import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore } from '../store/useStore'
 import type { ConnectionStatus, ModuleStatus, DataTrustRow, BasisRow } from '../store/useStore'
+import VpsSettingsModal from './VpsSettingsModal'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -224,9 +225,11 @@ function ConnectionsBlock() {
 function VpsServerBlock() {
   const vps = useStore((s: any) => s.vpsStatus)
   const pulseState = useStore((s: any) => s.pulseState)
+  const vpsConfig = useStore((s: any) => s.vpsConfig)
   const hb = pulseState?.vps_heartbeat
   const connStatus = vps ? (vps.service?.active ? 'normal' : 'lost') : 'stopped'
   const connLabel  = vps ? (vps.service?.active ? 'Активен' : 'Не активен') : 'Нет связи'
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Heartbeat индикатор
   const hbAge = hb?.seconds_since ?? Infinity
@@ -249,8 +252,18 @@ function VpsServerBlock() {
     <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em' }}>
-          СЕРВЕР VPS · 132.243.235.173
+          СЕРВЕР VPS · {vpsConfig.host}:{vpsConfig.port}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            style={{
+              marginLeft: 8, background: 'none', border: 'none',
+              cursor: 'pointer', fontSize: 13, color: 'var(--text-muted)',
+              padding: '2px 4px', borderRadius: 4,
+            }}
+            title="Настройки VPS"
+          >⚙️</button>
         </span>
+        <VpsSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {/* Heartbeat индикатор */}
           <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontFamily: 'var(--font-mono)', color: hbColor }}>
@@ -460,9 +473,28 @@ function ModuleInfoPopover({ moduleName }: { moduleName: string }) {
 
 function ModulesBlock() {
   const pulseState = useStore(s => s.pulseState)
+  const vpsStatus  = useStore((s: any) => s.vpsStatus)
   const modules: ModuleStatus[] = pulseState?.modules ?? []
 
   if (modules.length === 0) {
+    // Если pulseState ещё не пришёл, но VPS доступен — показываем статус сервиса VPS
+    if (vpsStatus?.service?.active) {
+      return (
+        <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em', marginBottom: 12 }}>СОСТОЯНИЕ МОДУЛЕЙ</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-primary)', fontWeight: 500 }}>Сервис VPS</span>
+              <span style={{ fontSize: 10, color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}>Активен</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: 'var(--text-primary)', fontWeight: 500 }}>С момента</span>
+              <span style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>{vpsStatus.service.since}</span>
+            </div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-lg)', padding: '14px 18px' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', letterSpacing: '0.08em', marginBottom: 12 }}>СОСТОЯНИЕ МОДУЛЕЙ</div>
@@ -803,6 +835,7 @@ interface PulseViewProps {
 
 export default function PulseView({ onRequestPulse }: PulseViewProps) {
   const pulseState = useStore(s => s.pulseState)
+  const vpsStatus  = useStore((s: any) => s.vpsStatus)
   const connected  = useStore(s => s.connected)
   const criticalEvents = useStore(s => s.criticalEvents)
   const unseenCount = criticalEvents.filter(e => !e.seen).length
@@ -812,8 +845,9 @@ export default function PulseView({ onRequestPulse }: PulseViewProps) {
     if (connected) onRequestPulse()
   }, [connected])
 
-  // VPS stale banner
-  const isStale = pulseState?.vps_data_stale ?? true
+  // VPS stale banner: VPS доступен если vpsStatus есть и service.active === true
+  const vpsOk = vpsStatus?.service?.active === true
+  const isStale = !vpsOk
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>

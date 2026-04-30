@@ -59,6 +59,26 @@ export interface VpsHeartbeat {
   uptime_sec: number | null
 }
 
+export interface VpsConfig {
+  host: string
+  port: number
+  apiKey: string
+}
+
+const DEFAULT_VPS: VpsConfig = {
+  host: '132.243.235.173',
+  port: 8800,
+  apiKey: 'vps_telemetry_key_2026',
+}
+
+function loadVpsConfig(): VpsConfig {
+  try {
+    const raw = localStorage.getItem('vpsConfig')
+    if (raw) return JSON.parse(raw) as VpsConfig
+  } catch { /* ignore */ }
+  return DEFAULT_VPS
+}
+
 export interface PulseState {
   connections: ConnectionStatus[]
   modules: ModuleStatus[]
@@ -242,6 +262,10 @@ interface Store {
   setOptimizerRunning: (strategyId: string, v: boolean) => void
 
 
+  // ── VPS Config ────────────────────────────────────────────────────────────
+  vpsConfig: VpsConfig
+  setVpsConfig: (c: VpsConfig) => void
+
   // ── VPS Telemetry ──────────────────────────────────────────────────────────
   vpsStatus: VpsStatus | null
   setVpsStatus: (s: VpsStatus) => void
@@ -259,6 +283,13 @@ export const useStore = create<Store>()(persist((set) => ({
 
   mode: 'alert_only',
   setMode: (m) => set({ mode: m }),
+
+  // VPS Config (сохраняется в localStorage отдельно от persist)
+  vpsConfig: loadVpsConfig(),
+  setVpsConfig: (c) => {
+    localStorage.setItem('vpsConfig', JSON.stringify(c))
+    set({ vpsConfig: c })
+  },
   positions: [],
   setPositions: (p) => set({ positions: p }),
   signals: [],

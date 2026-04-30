@@ -126,6 +126,16 @@
 - **Тесты:** 203/203 пройдены
 - **Статус:** ✅ Готово
 
+## [UI] VPS Settings — финальная проверка + коммит — 2026-04-30
+- **Время:** 18:15 MSK
+- **Что сделано:**
+  - Проверены все файлы: VpsSettingsModal.tsx, PulseView.tsx, useVpsTelemetry.ts, useStore.ts
+  - Запущены 203 unit-теста — все пройдены (0 failures)
+  - Подготовлен коммит с изменениями
+- **Файлы:** `ui/react-app/src/components/VpsSettingsModal.tsx` (новый), `ui/react-app/src/components/PulseView.tsx`, `ui/react-app/src/store/useStore.ts`, `ui/react-app/src/hooks/useVpsTelemetry.ts`, `data/bingx_futures_ws.py`, `plans/full-execution-plan.md`
+- **Тесты:** 203/203 passed
+- **Статус:** ✅ Готово к пушу
+
 ## [UI] VPS Settings — модалка + параметризация — 2026-04-30
 - **Время:** 14:00-14:10 MSK
 - **Что сделано:**

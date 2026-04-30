@@ -37,6 +37,7 @@ WS_URL = "wss://open-api-ws.bingx.com/market"
 PING_INTERVAL = 20          # секунд
 MAX_RECONNECT_DELAY = 60    # секунд
 MIN_RECONNECT_DELAY = 3
+MSG_TIMEOUT = 300           # 5 минут без сообщений → принудительный разрыв
 
 
 class BingXFuturesWebSocket:
@@ -96,11 +97,14 @@ class BingXFuturesWebSocket:
             ) as ws:
                 self._ws = ws
                 self.status = "connected"
+                self.last_message_at = time.time()
                 log.info("Futures WS подключён")
                 await self._bus.publish("futures.ws.connected", {"symbols": self._symbols})
 
                 await self._subscribe(ws)
                 ping_task = asyncio.create_task(self._ping_loop(ws))
+                # Фоновая задача: принудительный разрыв, если нет данных > MSG_TIMEOUT
+                stale_watchdog = asyncio.create_task(self._stale_watchdog(ws))
 
                 try:
                     async for msg in ws:
@@ -115,7 +119,21 @@ class BingXFuturesWebSocket:
                             break
                 finally:
                     ping_task.cancel()
+                    stale_watchdog.cancel()
                     self.status = "disconnected"
+
+    async def _stale_watchdog(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Принудительно закрывает соединение, если от сервера нет данных > MSG_TIMEOUT."""
+        while not ws.closed:
+            await asyncio.sleep(30)
+            elapsed = time.time() - self.last_message_at
+            if elapsed > MSG_TIMEOUT and not ws.closed:
+                log.warning(
+                    f"Futures WS: нет данных {elapsed:.0f}с (> {MSG_TIMEOUT}с). "
+                    f"Принудительный разрыв для переподключения."
+                )
+                await ws.close()
+                break
 
     async def _subscribe(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         for symbol in self._symbols:
@@ -151,7 +169,8 @@ class BingXFuturesWebSocket:
     async def _handle_message(self, raw: bytes) -> None:
         try:
             data = json.loads(raw)
-        except Exception:
+        except Exception as e:
+            log.warning(f"Futures WS: ошибка парсинга сообщения: {e}. Данные: {raw[:200]}")
             return
 
         if data == "Pong" or data.get("msg") == "Pong":
