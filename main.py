@@ -260,6 +260,7 @@ async def _run_terminal() -> None:
         data_verifier=None,
         ws_client=None,
         futures_ws=None,
+        vps_client=vps_client,
         host=config.WS_HOST,
         port=config.WS_PORT,
     )

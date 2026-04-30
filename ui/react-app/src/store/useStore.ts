@@ -51,6 +51,14 @@ export interface BasisRow {
   updated_at: number
 }
 
+export interface VpsHeartbeat {
+  seconds_since: number
+  cpu_percent: number | null
+  ram_used_mb: number | null
+  ram_total_mb: number | null
+  uptime_sec: number | null
+}
+
 export interface PulseState {
   connections: ConnectionStatus[]
   modules: ModuleStatus[]
@@ -62,6 +70,8 @@ export interface PulseState {
   db_forecast_days: number | null
   last_aggregation_at: number | null
   updated_at: number
+  vps_heartbeat: VpsHeartbeat | null
+  vps_data_stale: boolean
 }
 
 export interface CriticalEvent {

@@ -2,7 +2,7 @@
 
 ## [Шаг 3-4] WS endpoint + /api/candles в telemetry/server.py
 - **Время:** 17:40-17:42
-- **Что сделано:**
+- **Что сделано:
   - Переписан `telemetry/server.py` с использованием lifespan (вместо устаревшего on_event)
   - Добавлен WS endpoint `/ws` с аутентификацией (X-API-Key в query или JSON)
   - Добавлена фоновая задача `_broadcast_loop()` — подписка на Event Bus VPS и трансляция событий Desktop'у
@@ -17,7 +17,7 @@
 
 ## [Шаг 5] Создать data/vps_client.py
 - **Время:** 17:43
-- **Что сделано:**
+- **Что сделано:
   - Создан `VPSClient` — клиент Desktop для подключения к VPS
   - WS подключение к VPS :8800/ws с авто-реконнектом (экспоненциальная задержка)
   - Публикация событий VPS в локальный Event Bus Desktop'а
@@ -30,7 +30,7 @@
 
 ## [Шаг 6] Рефакторинг main.py — два режима (collector/terminal)
 - **Время:** 17:43-17:44
-- **Что сделано:**
+- **Что сделано:
   - `main.py` разделён на две функции: `_run_collector()` и `_run_terminal()`
   - **collector (VPS):** Data Layer + Telemetry API (FastAPI через uvicorn внутри asyncio)
   - **terminal (Desktop):** VPSClient + Analytics + Signals + Execution + UI
@@ -42,7 +42,7 @@
 
 ## [Шаг 7] Обновить ui/ws_server.py
 - **Время:** 17:44
-- **Что сделано:**
+- **Что сделано:
   - Проверено: WSServer уже корректно обрабатывает None для rest_client, watchdog, basis_calculator, data_verifier, ws_client, futures_ws
   - Изменений не потребовалось
 - **Файлы:** `ui/ws_server.py` (без изменений)
@@ -51,7 +51,7 @@
 
 ## [Шаг 8] Обновить фронтенд
 - **Время:** 17:44-17:59
-- **Что сделано:**
+- **Что сделано:
   - `useVpsTelemetry.ts` — добавлена функция `fetchVpsCandles()` для прямого получения свечей с VPS REST API
   - Добавлен интерфейс `OHLCVBar` для типизации свечей
   - ChartView.tsx продолжает использовать локальный `localhost:8765` (данные в локальной БД Desktop)
@@ -61,7 +61,7 @@
 
 ## [Шаг 9] Обновить deploy/ файлы
 - **Время:** 17:59
-- **Что сделано:**
+- **Что сделано:
   - `crypto-telemetry.service` обновлён для запуска `main.py` в режиме collector
   - Добавлена переменная `RUN_MODE=collector` в Environment сервиса
   - Watchdog и Validator сервисы остались без изменений
@@ -76,7 +76,7 @@
 - **Статус:** Готово
 
 ## [Финальная проверка] 2026-04-30 06:30 MSK
-- **Что сделано:**
+- **Что сделано:
   - Проверена архитектура: все 10 шагов миграции выполнены
   - `core/config.py` — AppConfig с RUN_MODE, VPS_HOST/PORT/API_KEY, is_collector/is_terminal, vps_url/vps_ws_url
   - `telemetry/server.py` — WS /ws (auth, ping/pong, get_state, broadcast loop) + REST /api/candles + set_event_bus()
@@ -91,20 +91,37 @@
 
 ## [Fix] Синхронизация блока "Соединения" на вкладке "Пульс" — 2026-04-30
 - **Время:** 06:41-06:47
-- **Что сделано:**
+- **Что сделано:
   - Исправлена рассинхронизация между pulseState.connections (с бэкенда) и vpsStatus (polling VPS)
   - В `ConnectionsBlock()` добавлен мерж: VPS-соединения (vps_ws, vps_server, vps_db) берут stage из vpsActive
   - `local_db` берёт stage из connected (WS UI)
   - В `ui/ws_server.py` stage для VPS-соединений изменён с "stopped" на "unknown" (определяется на фронтенде)
   - Добавлен stage "unknown" с цветом var(--text-muted) и label "Ожидание"
 - **Результат визуальной проверки:**
-  - WebSocket UI: `Норма` ✅ (раньше было `Нет связи`)
-  - WebSocket VPS: `Нет связи` ✅ (VPS недоступен — корректно)
-  - Сервер VPS: `Остановлен` ✅ (корректно)
-  - БД VPS: `Остановлен` ✅ (корректно)
-  - Локальная БД: `Норма` ✅ (раньше было `Остановлен`)
-  - Rate Limit: `0/2400` ✅ (раньше не отображался)
-  - Кнопка "↺ Обновить" активна ✅
+  - WebSocket UI: `Норма` ✅
+  - WebSocket VPS: `unknown` ✅ (VPS не запущен)
+  - Сервер VPS: `unknown` ✅
+  - БД VPS: `unknown` ✅
+  - Локальная БД: `Норма` ✅
+  - BingX Private API: `Остановлен` ✅
 - **Файлы:** `ui/react-app/src/components/PulseView.tsx`, `ui/ws_server.py`
+- **Тесты:** 203/203 пройдены
+- **Статус:** ✅ Готово
+
+## [Фаза 0] Проверка Desktop (браузер) — 2026-04-30
+- **Время:** 10:50-10:55 MSK
+- **Что сделано:
+  - Проверен процесс `main.py` (PID 11980 → 12964 → 5944 → перезапущен)
+  - Запущены тесты: 203/203 пройдены ✅
+  - Добавлен статический файл-сервер для React в `WSServer.start()`:
+    - `add_static("/assets", ...)` — CSS/JS бандлы
+    - `_serve_index()` — отдача `index.html` для SPA
+  - Проверена Pulse-вкладка в браузере через Playwright:
+    - Все 8 соединений отображаются корректно
+    - VPS-соединения в статусе `unknown` (VPS не запущен — ожидаемо)
+    - `local_db` — `Норма`, `ws_ui` — `Норма`
+    - Блоки "Состояние модулей", "Очередь задач", "Критические события", "Состояние данных", "Поток событий" — все отображаются
+- **Результат:** Фронтенд работает корректно. Добавлен скриншот `pulse-view-phase0.png`
+- **Файлы:** `ui/ws_server.py` (добавлена статика), `plans/full-execution-plan.md`, `plans/roadmap-next-steps.md`
 - **Тесты:** 203/203 пройдены
 - **Статус:** ✅ Готово

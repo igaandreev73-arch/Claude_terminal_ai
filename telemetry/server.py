@@ -52,12 +52,49 @@ BROADCAST_EVENTS: set[str] = {
 }
 
 
+# ── Heartbeat ────────────────────────────────────────────────────────────────
+_heartbeat_data: dict = {
+    "cpu_percent": 0.0,
+    "ram_used_mb": 0.0,
+    "ram_total_mb": 0.0,
+    "uptime_sec": 0,
+}
+
+
+async def _heartbeat_loop() -> None:
+    """Отправляет heartbeat всем подключённым WS-клиентам раз в 5 секунд."""
+    import psutil
+    while True:
+        await asyncio.sleep(5)
+        if not _ws_clients:
+            continue
+        try:
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory()
+            uptime = time.time() - psutil.boot_time()
+            _heartbeat_data.update(
+                cpu_percent=cpu,
+                ram_used_mb=round(ram.used / 1024 / 1024, 1),
+                ram_total_mb=round(ram.total / 1024 / 1024, 1),
+                uptime_sec=int(uptime),
+            )
+            msg = {
+                "type": "heartbeat",
+                **_heartbeat_data,
+                "ts": int(time.time() * 1000),
+            }
+            await _broadcast(msg)
+        except Exception as exc:
+            log.warning(f"Heartbeat error: {exc}")
+
+
 # ── Lifespan (замена on_event("startup")/on_event("shutdown")) ──────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управляет жизненным циклом приложения."""
     # Startup
     asyncio.create_task(_watch())
+    asyncio.create_task(_heartbeat_loop())
     try:
         for line in ENV_PATH.read_text().splitlines():
             if line.startswith("TELEGRAM_TOKEN="):

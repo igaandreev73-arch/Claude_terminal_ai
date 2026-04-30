@@ -54,6 +54,10 @@ class VPSClient:
         self.max_reconnect_delay = 30.0
         self._reconnect_attempts = 0
 
+        # Heartbeat
+        self._last_heartbeat: int = 0  # timestamp ms
+        self._last_heartbeat_data: dict = {}
+
         # Подписчики на сырые события (до публикации в Event Bus)
         self._raw_handlers: list[EventHandler] = []
 
@@ -149,6 +153,20 @@ class VPSClient:
             except Exception:
                 break
 
+    @property
+    def seconds_since_heartbeat(self) -> float:
+        """Секунд с последнего heartbeat. inf если heartbeat не было."""
+        if self._last_heartbeat == 0:
+            return float('inf')
+        return time.time() - self._last_heartbeat / 1000
+
+    @property
+    def is_data_stale(self) -> bool:
+        """True, если нет heartbeat >60 сек или WS отключён."""
+        if not self.is_connected:
+            return True
+        return self.seconds_since_heartbeat > 60
+
     async def _on_message(self, raw: str) -> None:
         """Обрабатывает входящее WS сообщение от VPS."""
         try:
@@ -158,6 +176,15 @@ class VPSClient:
             return
 
         msg_type = msg.get("type", "")
+
+        # Heartbeat от VPS
+        if msg_type == "heartbeat":
+            self._last_heartbeat = msg.get("ts", int(time.time() * 1000))
+            self._last_heartbeat_data = msg
+            self.is_connected = True
+            self._reconnect_attempts = 0
+            self.reconnect_delay = 1.0
+            return
 
         # Pong от VPS
         if msg_type == "pong":

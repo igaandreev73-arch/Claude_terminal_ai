@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import pathlib
 import time
 import weakref
 from datetime import datetime, timezone
@@ -86,6 +88,7 @@ class WSServer:
         data_verifier=None,
         ws_client=None,
         futures_ws=None,
+        vps_client=None,
         host: str = "localhost",
         port: int = 8765,
     ) -> None:
@@ -99,6 +102,7 @@ class WSServer:
         self._data_verifier = data_verifier
         self._ws_client = ws_client
         self._futures_ws = futures_ws
+        self._vps_client = vps_client
         self._host = host
         self._port = port
         self._clients: weakref.WeakSet[WebSocketResponse] = weakref.WeakSet()
@@ -117,11 +121,30 @@ class WSServer:
         self._app.router.add_get("/health", self._health_handler)
         self._app.router.add_get("/api/candles", self._candles_http_handler)
 
+        # Статика React (собранный фронтенд)
+        dist = pathlib.Path(__file__).resolve().parent / "react-app" / "dist"
+        if dist.is_dir():
+            self._app.router.add_static("/assets", dist / "assets")
+            self._app.router.add_get("/", self._serve_index)
+            log.info(f"Статика React загружена из {dist}")
+        else:
+            log.warning(f"Директория статики не найдена: {dist}")
+
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self._host, self._port)
         await site.start()
         log.info(f"WebSocket сервер запущен: ws://{self._host}:{self._port}/ws")
+
+    async def _serve_index(self, request: web.Request) -> web.Response:
+        dist = pathlib.Path(__file__).resolve().parent / "react-app" / "dist"
+        index = dist / "index.html"
+        if index.is_file():
+            return web.Response(
+                text=index.read_text(encoding="utf-8"),
+                content_type="text/html",
+            )
+        return web.Response(status=404, text="index.html not found")
 
     async def stop(self) -> None:
         for ws in list(self._clients):
@@ -813,6 +836,21 @@ class WSServer:
                 "priority": "CRITICAL" if pct > 90 else ("HIGH" if pct > 70 else "NORMAL"),
             }
 
+        # ── VPS Heartbeat ─────────────────────────────────────────────────────
+        vps_heartbeat = None
+        if self._vps_client:
+            hb = self._vps_client._last_heartbeat_data
+            vps_heartbeat = {
+                "seconds_since": round(self._vps_client.seconds_since_heartbeat, 1),
+                "cpu_percent":   hb.get("cpu_percent"),
+                "ram_used_mb":   hb.get("ram_used_mb"),
+                "ram_total_mb":  hb.get("ram_total_mb"),
+                "uptime_sec":    hb.get("uptime_sec"),
+            }
+
+        # ── VPS data stale ────────────────────────────────────────────────────
+        vps_data_stale = self._vps_client.is_data_stale if self._vps_client else True
+
         await self._send(ws, {
             "type":               "pulse_state",
             "connections":        connections,
@@ -824,6 +862,8 @@ class WSServer:
             "db_growth_mb_7d":    0,
             "db_forecast_days":   None,
             "last_aggregation_at": None,
+            "vps_heartbeat":      vps_heartbeat,
+            "vps_data_stale":     vps_data_stale,
             "updated_at":         int(_time.time()),
         })
 

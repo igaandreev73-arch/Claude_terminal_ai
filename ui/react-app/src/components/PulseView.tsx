@@ -223,8 +223,15 @@ function ConnectionsBlock() {
 
 function VpsServerBlock() {
   const vps = useStore((s: any) => s.vpsStatus)
+  const pulseState = useStore((s: any) => s.pulseState)
+  const hb = pulseState?.vps_heartbeat
   const connStatus = vps ? (vps.service?.active ? 'normal' : 'lost') : 'stopped'
   const connLabel  = vps ? (vps.service?.active ? 'Активен' : 'Не активен') : 'Нет связи'
+
+  // Heartbeat индикатор
+  const hbAge = hb?.seconds_since ?? Infinity
+  const hbColor = hbAge < 15 ? 'var(--accent-green)' : hbAge < 30 ? 'var(--accent-orange)' : '#ef4444'
+  const hbLabel = hbAge < 60 ? `${Math.round(hbAge)}с назад` : 'Нет сигнала'
 
   function Bar({ pct, warn = 70, crit = 85 }: { pct: number; warn?: number; crit?: number }) {
     const color = pct >= crit ? '#f87171' : pct >= warn ? 'var(--accent-orange)' : 'var(--accent-green)'
@@ -245,6 +252,11 @@ function VpsServerBlock() {
           СЕРВЕР VPS · 132.243.235.173
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* Heartbeat индикатор */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontFamily: 'var(--font-mono)', color: hbColor }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: hbColor }} />
+            {hbLabel}
+          </span>
           {vps?.telegram_ok != null && (
             <span style={{ fontSize: 10, color: vps.telegram_ok ? 'var(--accent-green)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
               {vps.telegram_ok ? '🔔 TG' : '🔕 TG'}
@@ -800,8 +812,22 @@ export default function PulseView({ onRequestPulse }: PulseViewProps) {
     if (connected) onRequestPulse()
   }, [connected])
 
+  // VPS stale banner
+  const isStale = pulseState?.vps_data_stale ?? true
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden' }}>
+
+      {/* Stale data banner */}
+      {isStale && (
+        <div style={{
+          background: '#7f1d1d', color: '#fca5a5',
+          padding: '8px 16px', borderRadius: 8,
+          fontSize: 13, fontWeight: 500, flexShrink: 0,
+        }}>
+          ⚠️ Данные устарели: VPS недоступен. Сигналы отключены.
+        </div>
+      )}
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
