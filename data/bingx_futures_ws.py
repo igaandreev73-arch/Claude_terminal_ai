@@ -5,13 +5,14 @@ BingX Futures WebSocket клиент.
   - {symbol}@kline_1min   → свечи реального времени (фьючерс)
   - {symbol}@depth20      → стакан фьючерса
   - {symbol}@trade        → поток сделок для CVD
-  - {symbol}@forceOrder   → ликвидации (невосстанавливаемые!)
 
 Публикует события в EventBus:
   - futures.candle.1m.tick / futures.candle.1m.closed
   - futures.orderbook.update
   - futures.trade.raw
-  - futures.liquidation          ← критическое, невосстанавливаемое
+
+Примечание: канал @forceOrder не поддерживается BingX Futures API.
+Ликвидации доступны только через REST: GET /openApi/swap/v2/trade/forceOrders
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 
 log = get_logger("FuturesWS")
 
+# BingX использует единый WS эндпоинт для spot и futures (swap)
 WS_URL = "wss://open-api-ws.bingx.com/market"
 PING_INTERVAL = 20          # секунд
 MAX_RECONNECT_DELAY = 60    # секунд
@@ -143,7 +145,6 @@ class BingXFuturesWebSocket:
                 f"{sym}@kline_1min",
                 f"{sym}@depth20",
                 f"{sym}@trade",
-                f"{sym}@forceOrder",  # ликвидации
             ]
             for stream in streams:
                 payload = {"id": f"sub-{stream}", "reqType": "sub", "dataType": stream}
@@ -167,14 +168,26 @@ class BingXFuturesWebSocket:
         self.messages_per_min = len(self._msg_count_window)
 
     async def _handle_message(self, raw: bytes) -> None:
+        # BingX шлёт Ping (не Pong) — фильтруем до парсинга JSON
+        raw_str = raw.decode(errors="replace").strip()
+        if raw_str in ("Ping", "Pong"):
+            return
+
         try:
             data = json.loads(raw)
         except Exception as e:
             log.warning(f"Futures WS: ошибка парсинга сообщения: {e}. Данные: {raw[:200]}")
             return
 
-        if data == "Pong" or data.get("msg") == "Pong":
+        if isinstance(data, dict) and data.get("msg") in ("Ping", "Pong"):
             return
+
+        # DEBUG: логируем первые 10 не-Ping сообщений для диагностики
+        if not hasattr(self, '_debug_count'):
+            self._debug_count = 0
+        if self._debug_count < 10:
+            self._debug_count += 1
+            log.info(f"Futures WS DEBUG #{self._debug_count}: {raw_str[:300]}")
 
         data_type: str = data.get("dataType", "")
         payload = data.get("data", {})
@@ -190,10 +203,6 @@ class BingXFuturesWebSocket:
         # ── Поток сделок ──────────────────────────────────────────────────────
         elif "@trade" in data_type:
             await self._on_trade(data_type, payload)
-
-        # ── Ликвидации (невосстанавливаемые!) ─────────────────────────────────
-        elif "@forceOrder" in data_type:
-            await self._on_liquidation(data_type, payload)
 
     async def _on_kline(self, data_type: str, payload: dict) -> None:
         # dataType: "BTC-USDT@kline_1min"
@@ -258,28 +267,3 @@ class BingXFuturesWebSocket:
         except (ValueError, TypeError):
             pass
 
-    async def _on_liquidation(self, data_type: str, payload: dict) -> None:
-        """Ликвидация — критическое событие, невосстанавливаемое."""
-        symbol = data_type.split("@")[0].replace("-", "/")
-        try:
-            o = payload.get("o", payload)
-            side_raw = o.get("S", o.get("side", "")).upper()
-            side = "long" if side_raw in ("BUY", "LONG") else "short"
-            price = float(o.get("p", o.get("price", 0)) or o.get("ap", 0))
-            qty = float(o.get("q", o.get("origQty", 0)))
-            value_usd = price * qty if price and qty else None
-
-            liq = {
-                "symbol": symbol,
-                "timestamp": int(o.get("T", o.get("time", time.time() * 1000))),
-                "side": side,
-                "price": price,
-                "quantity": qty,
-                "value_usd": value_usd,
-                "liq_type": "forced",
-                "market_type": "futures",
-            }
-            await self._bus.publish("futures.liquidation", liq)
-            log.debug(f"Ликвидация {symbol} {side} ${value_usd:.0f}" if value_usd else f"Ликвидация {symbol} {side}")
-        except (ValueError, TypeError) as e:
-            log.debug(f"Ошибка парсинга ликвидации: {e}")

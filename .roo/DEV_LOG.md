@@ -145,3 +145,30 @@
 - **Файлы:** `ui/react-app/src/hooks/useVpsTelemetry.ts`, `ui/react-app/src/components/ChartView.tsx`
 - **Тесты:** сборка прошла успешно
 - **Статус:** ✅ Готово
+
+## [Cleanup] Удалена бесполезная подписка @forceOrder — 2026-04-30
+- **Время:** 23:50 MSK
+- **Что сделано:**
+  - Удалена подписка `{symbol}@forceOrder` из `_subscribe()` — BingX не поддерживает WS-канал ликвидаций
+  - Удалён мёртвый метод `_on_liquidation()` — никогда не вызывался
+  - Удалена ветка `@forceOrder` из `_handle_message()`
+  - Обновлён docstring: убрано упоминание forceOrder, добавлено примечание про REST API
+- **Файлы:** `data/bingx_futures_ws.py`
+- **Тесты:** 203/203 passed (53.35s)
+- **Статус:** ✅ Готово
+
+## [Cleanup] REST polling ликвидаций (forceOrders) — 2026-04-30
+- **Время:** 00:14 MSK
+- **Что сделано:**
+  - В `BingXRestClient` добавлены:
+    - `_sign()` — HMAC-SHA256 подпись для приватных запросов
+    - `_signed_get()` — GET с подписью и X-BX-APIKEY
+    - `fetch_force_orders(symbol, limit, start_time, auto_close_type)` — опрос `/openApi/swap/v2/trade/forceOrders`
+  - В `_run_collector()` (main.py) добавлена фоновая задача `_poll_liquidations_loop()`:
+    - Каждые 60с опрашивает forceOrders для всех symbols
+    - Парсит ответ и публикует `futures.liquidation` в EventBus
+    - Существующий обработчик `_on_liquidation` сохраняет в БД
+  - API-ключи читаются из `AppConfig` (BINGX_API_KEY / BINGX_API_SECRET)
+- **Файлы:** `data/bingx_rest.py`, `main.py`
+- **Тесты:** 203/203 passed (52.31s)
+- **Статус:** ✅ Готово

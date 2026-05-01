@@ -146,6 +146,39 @@ async def _run_collector() -> None:
     await basis_calculator.start()
     asyncio.create_task(watchdog.start())
 
+    # REST polling ликвидаций (forceOrders) — каждые 60с
+    async def _poll_liquidations_loop():
+        """Периодически опрашивает forceOrders и публикует события."""
+        import time as _t
+        while True:
+            try:
+                await asyncio.sleep(60)
+                for sym in symbols:
+                    orders = await rest_client.fetch_force_orders(sym, limit=50)
+                    for o in orders:
+                        side_raw = o.get("S", o.get("side", "")).upper()
+                        side = "long" if side_raw in ("BUY", "LONG") else "short"
+                        price = float(o.get("p", o.get("price", 0)) or 0)
+                        qty = float(o.get("q", o.get("origQty", 0)) or 0)
+                        value_usd = price * qty if price and qty else None
+                        liq = {
+                            "symbol": sym,
+                            "timestamp": int(o.get("T", o.get("time", _t.time() * 1000))),
+                            "side": side,
+                            "price": price,
+                            "quantity": qty,
+                            "value_usd": value_usd,
+                            "liq_type": "forced",
+                            "market_type": "futures",
+                        }
+                        await event_bus.publish("futures.liquidation", liq)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.warning(f"Polling ликвидаций: {exc}")
+
+    asyncio.create_task(_poll_liquidations_loop())
+
     # Проверка целостности, обновление, бэкфилл (в фоне)
     async def _startup_data():
         await repair_integrity(symbols, candles_repo)
