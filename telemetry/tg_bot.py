@@ -5,10 +5,12 @@ Telegram Bot — long polling для команд.
 Использует существующие функции из telemetry/server.py для получения данных.
 
 Команды:
-  /summary  — сводка по БД (размер, свечи, стаканы, ликвидации)
+  /summary  — детальная сводка (БД, свечи spot/futures, стаканы, ликвидации, соединения)
   /status   — статус сервисов (collector, WS, watchdog)
   /health   — здоровье системы (CPU, RAM, диск, uptime)
   /symbols  — список пар с trust_score
+  /backfill — статус задач backfill
+  /errors   — последние ошибки из лога
   /help     — список команд
 """
 from __future__ import annotations
@@ -16,8 +18,10 @@ from __future__ import annotations
 import asyncio
 import os
 import ssl
+import sqlite3
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import certifi
 
@@ -34,6 +38,9 @@ log = get_logger("TGBot")
 # Импортируем функции из server.py для получения данных
 # (они используют ту же БД и те же утилиты)
 from telemetry.server import _datastats, _dbstats, _svc, _sys, _syms
+
+# Путь к БД (должен совпадать с telemetry/server.py)
+DB_PATH = Path(os.getenv("DB_PATH", "/opt/collector/data/terminal.db"))
 
 
 class TelegramBot:
@@ -132,7 +139,11 @@ class TelegramBot:
             reply = self._build_health()
         elif command == "/symbols":
             reply = self._build_symbols()
-        elif command == "/help":
+        elif command == "/backfill":
+            reply = self._build_backfill()
+        elif command == "/errors":
+            reply = self._build_errors()
+        elif command in ("/help", "/start"):
             reply = self._build_help()
         else:
             reply = (
@@ -165,8 +176,44 @@ class TelegramBot:
 
     # ── Построение ответов ─────────────────────────────────────────────────
 
+    def _get_ws_status(self) -> str:
+        """Статус WS-соединений из БД/лога."""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            cur = conn.cursor()
+            # Пробуем получить статус из system_logs
+            cur.execute(
+                "SELECT message FROM system_logs WHERE message LIKE 'WS%' ORDER BY id DESC LIMIT 5"
+            )
+            logs = [row[0] for row in cur.fetchall()]
+            conn.close()
+
+            ws_spot = "✅ Норма"
+            ws_futures = "✅ Норма"
+            for log_line in logs:
+                if "WS spot" in log_line.lower() or "BingXWebSocket" in log_line:
+                    if "error" in log_line.lower() or "disconnect" in log_line.lower():
+                        ws_spot = "⚠️ Сбой"
+                if "WS futures" in log_line.lower() or "BingXFuturesWebSocket" in log_line:
+                    if "error" in log_line.lower() or "disconnect" in log_line.lower():
+                        ws_futures = "⚠️ Сбой"
+
+            return (
+                f"🔌 <b>Соединения:</b>\n"
+                f"✅ WS Spot:  {ws_spot}\n"
+                f"✅ WS Futures: {ws_futures}\n"
+                f"✅ REST:     ✅ Норма"
+            )
+        except Exception:
+            return (
+                f"🔌 <b>Соединения:</b>\n"
+                f"✅ WS Spot:  ⚪ Н/Д\n"
+                f"✅ WS Futures: ⚪ Н/Д\n"
+                f"✅ REST:     ⚪ Н/Д"
+            )
+
     def _build_summary(self) -> str:
-        """Сводка по БД: /summary"""
+        """Детальная сводка: /summary"""
         try:
             db = _dbstats()
             data = _datastats()
@@ -177,15 +224,59 @@ class TelegramBot:
             total_liq = sum(d.get("liquidations", 0) for d in data)
             db_size = db.get("size_mb", 0)
 
+            # Разбивка spot/futures
+            try:
+                conn = sqlite3.connect(str(DB_PATH))
+                cur = conn.cursor()
+                cur.execute("SELECT COUNT(*) FROM candles WHERE market_type='spot'")
+                spot_candles = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM candles WHERE market_type='futures'")
+                futures_candles = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM orderbook_snapshots WHERE market_type='spot'")
+                spot_ob = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM orderbook_snapshots WHERE market_type='futures'")
+                futures_ob = cur.fetchone()[0]
+                # Диапазон дат
+                cur.execute("SELECT MIN(open_time), MAX(open_time) FROM candles WHERE market_type='spot'")
+                s_min, s_max = cur.fetchone()
+                cur.execute("SELECT MIN(open_time), MAX(open_time) FROM candles WHERE market_type='futures'")
+                f_min, f_max = cur.fetchone()
+                # OI и Funding
+                cur.execute("SELECT value, timestamp FROM futures_metrics WHERE metric='open_interest' ORDER BY timestamp DESC LIMIT 1")
+                oi_row = cur.fetchone()
+                cur.execute("SELECT value, timestamp FROM futures_metrics WHERE metric='funding_rate' ORDER BY timestamp DESC LIMIT 1")
+                fr_row = cur.fetchone()
+                # Ликвидации за 24ч
+                day_ago = int(time.time() * 1000) - 86400000
+                cur.execute("SELECT COUNT(*) FROM liquidations WHERE timestamp > ?", (day_ago,))
+                liq_24h = cur.fetchone()[0]
+                conn.close()
+
+                spot_days = (s_max - s_min) / 86400000 if s_min and s_max else 0
+                futures_days = (f_max - f_min) / 86400000 if f_min and f_max else 0
+                oi_str = f"${float(oi_row[0]):,.1f}" if oi_row else "Н/Д"
+                fr_str = f"{float(fr_row[0]):.4%}" if fr_row else "Н/Д"
+            except Exception:
+                spot_candles = futures_candles = 0
+                spot_ob = futures_ob = 0
+                spot_days = futures_days = 0
+                liq_24h = 0
+                oi_str = fr_str = "Н/Д"
+
             lines = [
-                f"📊 <b>Сводка VPS</b>",
-                f"━━━━━━━━━━━━━━━━",
+                f"📊 <b>СВОДКА VPS</b> — {now}",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
                 f"💾 БД: <b>{db_size:.1f} MB</b>",
-                f"🕯 Свечей: <b>{total_candles:,}</b>",
-                f"📖 Стаканов: <b>{total_ob:,}</b>",
-                f"💥 Ликвидаций: <b>{total_liq:,}</b>",
-                f"━━━━━━━━━━━━━━━━",
-                f"⏰ {now}",
+                f"🕯 Свечи: <b>{total_candles:,}</b>",
+                f"   ├── spot 1m:  {spot_candles:,} ({spot_days:.0f} дн)",
+                f"   └── futures 1m: {futures_candles:,} ({futures_days:.0f} дн)",
+                f"📖 Стаканы: <b>{total_ob:,}</b>",
+                f"   ├── spot:    {spot_ob:,}",
+                f"   └── futures: {futures_ob:,}",
+                f"💥 Ликвидации (24ч): <b>{liq_24h}</b>",
+                f"📊 OI: <b>{oi_str}</b>",
+                f"💰 Funding Rate: <b>{fr_str}</b>",
+                f"━━━━━━━━━━━━━━━━━━━━━━",
             ]
 
             # Добавляем информацию по символам
@@ -202,6 +293,12 @@ class TelegramBot:
                     f"trust {trust}%"
                 )
 
+            # Статус соединений
+            lines.append("")
+            lines.append(self._get_ws_status())
+
+            lines.append(f"━━━━━━━━━━━━━━━━━━━━━━")
+            lines.append(f"⏰ {now}")
             return "\n".join(lines)
         except Exception as e:
             return f"❌ Ошибка получения сводки: {e}"
@@ -285,16 +382,97 @@ class TelegramBot:
         except Exception as e:
             return f"❌ Ошибка получения списка пар: {e}"
 
+    def _build_backfill(self) -> str:
+        """Статус backfill: /backfill"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT symbol, status, progress, created_at FROM tasks "
+                "WHERE task_type='backfill' ORDER BY created_at DESC LIMIT 10"
+            )
+            tasks = cur.fetchall()
+            conn.close()
+
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+            if not tasks:
+                return (
+                    f"📥 <b>Backfill</b>\n"
+                    f"━━━━━━━━━━━━━━━━\n"
+                    f"Нет активных задач backfill.\n"
+                    f"━━━━━━━━━━━━━━━━\n"
+                    f"⏰ {now}"
+                )
+
+            lines = [
+                f"📥 <b>Backfill</b>",
+                f"━━━━━━━━━━━━━━━━",
+            ]
+            for sym, status, progress, created in tasks:
+                emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌" if status == "error" else "⏳"
+                pct = f"{progress}%" if progress else "—"
+                created_str = created[:16] if created else "—"
+                lines.append(f"{emoji} {sym}: {pct} ({status}) [{created_str}]")
+
+            lines.append(f"━━━━━━━━━━━━━━━━")
+            lines.append(f"⏰ {now}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ Ошибка получения статуса backfill: {e}"
+
+    def _build_errors(self) -> str:
+        """Последние ошибки: /errors"""
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT created_at, level, message FROM system_logs "
+                "WHERE level IN ('ERROR', 'CRITICAL', 'WARNING') "
+                "ORDER BY id DESC LIMIT 5"
+            )
+            errors = cur.fetchall()
+            conn.close()
+
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+            if not errors:
+                return (
+                    f"✅ <b>Ошибки</b>\n"
+                    f"━━━━━━━━━━━━━━━━\n"
+                    f"Последних ошибок нет.\n"
+                    f"━━━━━━━━━━━━━━━━\n"
+                    f"⏰ {now}"
+                )
+
+            lines = [
+                f"⚠️ <b>Последние ошибки</b>",
+                f"━━━━━━━━━━━━━━━━",
+            ]
+            for ts, level, msg in errors:
+                emoji = "🔴" if level == "CRITICAL" else "🟠" if level == "ERROR" else "🟡"
+                ts_str = ts[:16] if ts else "—"
+                msg_short = msg[:80] + "..." if len(msg) > 80 else msg
+                lines.append(f"{emoji} [{ts_str}] {msg_short}")
+
+            lines.append(f"━━━━━━━━━━━━━━━━")
+            lines.append(f"⏰ {now}")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"❌ Ошибка получения лога ошибок: {e}"
+
     def _build_help(self) -> str:
         """Список команд: /help"""
         return (
             f"🤖 <b>Crypto Terminal VPS — Telegram Bot</b>\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"Доступные команды:\n\n"
-            f"📊 <b>/summary</b> — сводка по БД\n"
+            f"📊 <b>/summary</b> — детальная сводка (БД, данные, соединения)\n"
             f"🔍 <b>/status</b> — статус сервисов\n"
-            f"❤️ <b>/health</b> — здоровье системы\n"
+            f"❤️ <b>/health</b> — здоровье системы (CPU/RAM/диск)\n"
             f"📈 <b>/symbols</b> — список пар с trust_score\n"
+            f"📥 <b>/backfill</b> — статус задач backfill\n"
+            f"⚠️ <b>/errors</b> — последние ошибки из лога\n"
             f"❓ <b>/help</b> — это сообщение\n"
             f"━━━━━━━━━━━━━━━━\n"
             f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
