@@ -146,6 +146,11 @@ async def _run_collector() -> None:
     await basis_calculator.start()
     asyncio.create_task(watchdog.start())
 
+    # Telegram Bot (команды /summary, /status, /health, /symbols)
+    from telemetry.tg_bot import TelegramBot
+    tg_bot = TelegramBot()
+    await tg_bot.start()
+
     # REST polling ликвидаций (forceOrders) — каждые 60с
     async def _poll_liquidations_loop():
         """Периодически опрашивает forceOrders и публикует события."""
@@ -216,6 +221,7 @@ async def _run_collector() -> None:
     await stop_event.wait()
 
     log.info("Получен сигнал остановки...")
+    await tg_bot.stop()
     await watchdog.stop()
     await futures_ws.stop()
     await basis_calculator.stop()

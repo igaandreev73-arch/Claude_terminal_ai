@@ -172,3 +172,14 @@
 - **Файлы:** `data/bingx_rest.py`, `main.py`
 - **Тесты:** 203/203 passed (52.31s)
 - **Статус:** ✅ Готово
+
+## [TG Bot] Telegram Bot Commands — 2026-05-01
+- **Время:** 13:50 MSK
+- **Что сделано:**
+  - Создан `telemetry/tg_bot.py` — Telegram Bot с long polling
+  - Команды: `/summary` (сводка БД), `/status` (статус сервисов), `/health` (CPU/RAM/диск), `/symbols` (пары с trust), `/help`
+  - Интегрирован в `main.py` — запуск в collector mode, остановка при сигнале
+  - Использует существующие функции `_datastats()`, `_dbstats()`, `_svc()`, `_sys()`
+- **Файлы:** `telemetry/tg_bot.py` (новый), `main.py`
+- **Тесты:** 203/203 passed (57s)
+- **Статус:** ✅ Готово
