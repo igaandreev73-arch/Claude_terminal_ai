@@ -13,6 +13,7 @@ terminal:
 """
 import asyncio
 import signal
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -120,6 +121,96 @@ async def _run_collector() -> None:
             log.error(f"Ошибка записи ликвидации: {exc}")
 
     event_bus.subscribe("futures.liquidation", _on_liquidation)
+
+    # ── Event-based Telegram уведомления (Компонент 2) ──────────────────────
+    from telemetry.server import _tg as _tg_send
+
+    async def _on_backfill_complete(event: Event) -> None:
+        """Уведомление о завершении бэкфилла."""
+        d = event.data
+        symbol = d.get("symbol", "?")
+        count = d.get("count", 0)
+        await _tg_send(
+            f"✅ <b>Backfill завершён</b>\n"
+            f"📈 {symbol}: +{count:,} свечей\n"
+            f"⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+        )
+
+    async def _on_backfill_error(event: Event) -> None:
+        """Уведомление об ошибке бэкфилла."""
+        d = event.data
+        symbol = d.get("symbol", "?")
+        error = d.get("error", "неизвестная ошибка")
+        await _tg_send(
+            f"❌ <b>Ошибка backfill</b>\n"
+            f"📈 {symbol}: {error}\n"
+            f"⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+        )
+
+    async def _on_validation_result(event: Event) -> None:
+        """Уведомление о результатах валидации (только ошибки)."""
+        d = event.data
+        symbol = d.get("symbol", "?")
+        status = d.get("status", "ok")
+        error = d.get("error") or d.get("message", "")
+        if status in ("error", "critical", "warning"):
+            emoji = "🔴" if status == "critical" else "⚠️"
+            await _tg_send(
+                f"{emoji} <b>Валидация {symbol}</b>\n"
+                f"Статус: {status}\n"
+                f"{error[:200]}\n"
+                f"⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+            )
+
+    async def _on_liquidation_alert(event: Event) -> None:
+        """Уведомление о крупных ликвидациях (>$100k)."""
+        d = event.data
+        value = d.get("value_usd") or 0
+        if value > 100_000:
+            symbol = d.get("symbol", "?")
+            side = d.get("side", "?")
+            price = d.get("price", 0)
+            qty = d.get("quantity", 0)
+            await _tg_send(
+                f"💥 <b>Крупная ликвидация</b>\n"
+                f"📈 {symbol} ({side.upper()})\n"
+                f"💰 ${value:,.0f} | Цена: ${price:,.2f}\n"
+                f"📊 Объём: {qty:.4f}\n"
+                f"⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+            )
+
+    async def _on_ws_disconnected(event: Event) -> None:
+        """Уведомление об отключении WS."""
+        d = event.data
+        name = d.get("name", "WS")
+        reconnect_in = d.get("reconnect_in", "?")
+        await _tg_send(
+            f"⚠️ <b>WS отключён</b>\n"
+            f"🔌 {name}\n"
+            f"⏱ Реконнект через {reconnect_in}с\n"
+            f"⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+        )
+
+    async def _on_ws_recovered(event: Event) -> None:
+        """Уведомление о восстановлении WS."""
+        d = event.data
+        name = d.get("name", "WS")
+        await _tg_send(
+            f"✅ <b>WS восстановлен</b>\n"
+            f"🔌 {name}\n"
+            f"⏰ {datetime.now(timezone.utc).strftime('%H:%M UTC')}"
+        )
+
+    # Подписки на события
+    event_bus.subscribe("backfill.complete", _on_backfill_complete)
+    event_bus.subscribe("backfill.error", _on_backfill_error)
+    event_bus.subscribe("validation.result", _on_validation_result)
+    event_bus.subscribe("futures.liquidation", _on_liquidation_alert)
+    event_bus.subscribe("watchdog.degraded", _on_ws_disconnected)
+    event_bus.subscribe("watchdog.lost", _on_ws_disconnected)
+    event_bus.subscribe("watchdog.dead", _on_ws_disconnected)
+    event_bus.subscribe("watchdog.recovered", _on_ws_recovered)
+    event_bus.subscribe("watchdog.reconnecting", _on_ws_disconnected)
 
     # Watchdog: регистрируем оба WS-соединения
     watchdog.register(

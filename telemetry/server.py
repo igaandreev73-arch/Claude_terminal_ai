@@ -668,6 +668,93 @@ async def tg_test(request: Request):
     return {"sent": ok}
 
 
+class TgTestAlert(BaseModel):
+    type: str = "ws_down"  # ws_down, disk_full, data_stale, liq_high, backfill_error
+
+
+class TgTestResolve(BaseModel):
+    type: str = "ws_down"  # ws_down, disk_full, data_stale
+
+
+def _simulate_alert(alert_type: str) -> str:
+    """Генерирует тестовое ALERT-сообщение."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    alerts = {
+        "ws_down": (
+            f"⚠️ <b>WS отключён</b>\n"
+            f"🔌 futures_ws\n"
+            f"⏱ Реконнект через 5с\n"
+            f"⏰ {now}"
+        ),
+        "disk_full": (
+            f"🚨 <b>ALERT — Crypto Terminal VPS</b>\n"
+            f"💾 Диск заполнен на <b>87%</b>\n"
+            f"Свободно: 2.3 GB\n"
+            f"⏰ {now}"
+        ),
+        "data_stale": (
+            f"🚨 <b>ALERT — Crypto Terminal VPS</b>\n"
+            f"⚠️ Данные BTC/USDT устарели на <b>12 мин</b>\n"
+            f"Возможна проблема с WS соединением\n"
+            f"⏰ {now}"
+        ),
+        "liq_high": (
+            f"💥 <b>Крупная ликвидация</b>\n"
+            f"📈 BTC/USDT (SHORT)\n"
+            f"💰 $1,250,000 | Цена: $95,230.00\n"
+            f"📊 Объём: 13.1245\n"
+            f"⏰ {now}"
+        ),
+        "backfill_error": (
+            f"❌ <b>Ошибка backfill</b>\n"
+            f"📈 SOL/USDT: Connection timeout\n"
+            f"⏰ {now}"
+        ),
+    }
+    return alerts.get(alert_type, alerts["ws_down"])
+
+
+def _simulate_resolve(resolve_type: str) -> str:
+    """Генерирует тестовое RESOLVE-сообщение."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    resolves = {
+        "ws_down": (
+            f"✅ <b>RESOLVED — Crypto Terminal VPS</b>\n"
+            f"🔌 WS соединение восстановлено\n"
+            f"⏰ {now}"
+        ),
+        "disk_full": (
+            f"✅ <b>RESOLVED — Crypto Terminal VPS</b>\n"
+            f"💾 Диск в норме: 62%\n"
+            f"⏰ {now}"
+        ),
+        "data_stale": (
+            f"✅ <b>RESOLVED — Crypto Terminal VPS</b>\n"
+            f"📈 Данные BTC/USDT актуальны (0.5 мин)\n"
+            f"⏰ {now}"
+        ),
+    }
+    return resolves.get(resolve_type, resolves["ws_down"])
+
+
+@app.post("/telegram/test/alert")
+async def tg_test_alert(body: TgTestAlert, request: Request):
+    """Симулирует ALERT: ws_down, disk_full, data_stale, liq_high, backfill_error."""
+    _auth(request)
+    msg = _simulate_alert(body.type)
+    ok = await _tg(msg)
+    return {"ok": ok, "type": body.type, "sent": msg[:80]}
+
+
+@app.post("/telegram/test/resolve")
+async def tg_test_resolve(body: TgTestResolve, request: Request):
+    """Симулирует RESOLVE: ws_down, disk_full, data_stale."""
+    _auth(request)
+    msg = _simulate_resolve(body.type)
+    ok = await _tg(msg)
+    return {"ok": ok, "type": body.type, "sent": msg[:80]}
+
+
 @app.get("/apikeys/status")
 async def apikeys_status(request: Request):
     _auth(request)

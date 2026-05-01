@@ -183,3 +183,30 @@
 - **Файлы:** `telemetry/tg_bot.py` (новый), `main.py`
 - **Тесты:** 203/203 passed (57s)
 - **Статус:** ✅ Готово
+
+## [Telegram Notifications 2.0] Компоненты 2-5 — 2026-05-01
+- **Время:** 14:45 MSK
+- **Что сделано:**
+  - **Компонент 2 (Event-based Notifications):** Добавлены подписки в `main.py`:
+    - `backfill.complete` / `backfill.error` — уведомления о бэкфилле
+    - `validation.result` — уведомления об ошибках валидации
+    - `futures.liquidation` — крупные ликвидации >$100k
+    - `watchdog.degraded/lost/dead` — отключение WS
+    - `watchdog.recovered` / `watchdog.reconnecting` — восстановление WS
+  - **Компонент 3 (Улучшение дайджеста):** Расширен ежедневный дайджест в `telemetry/watchdog.py`:
+    - Split spot/futures для свечей и стаканов
+    - Ликвидации за последние 24 часа
+    - Uptime сервера
+    - Свободное место на диске в GB
+  - **Компонент 4 (REST endpoint тестирования):** Добавлены в `telemetry/server.py`:
+    - `POST /telegram/test/alert` — симуляция ALERT (5 типов)
+    - `POST /telegram/test/resolve` — симуляция RESOLVE (3 типа)
+    - Функции `_simulate_alert()` и `_simulate_resolve()`
+  - **Компонент 5 (Скрипт тестирования):** Создан `scripts/test_alerts.py`:
+    - Тестирует все типы ALERT/RESOLVE через REST API
+    - Проверяет команды бота /summary, /status
+    - Проверяет конфигурацию Telegram
+    - Цветной вывод с эмодзи
+- **Файлы:** `main.py`, `telemetry/watchdog.py`, `telemetry/server.py`, `scripts/test_alerts.py` (новый)
+- **Тесты:** 203/203 passed (52s)
+- **Статус:** ✅ Готово

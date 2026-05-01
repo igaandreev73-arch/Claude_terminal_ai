@@ -136,7 +136,7 @@ async def check_loop() -> None:
             except Exception as e:
                 print(f"[DISK CHECK ERROR] {e}", flush=True)
 
-            # 4. Ежедневный дайджест в 09:00 UTC
+            # 4. Ежедневный дайджест в 09:00 UTC (расширенный)
             now = datetime.utcnow()
             digest_key = f"digest_{now.date()}"
             if now.hour == 9 and now.minute < 2 and digest_key not in _alerted:
@@ -144,23 +144,51 @@ async def check_loop() -> None:
                     _alerted.add(digest_key)
                     conn_db = sqlite3.connect(DB_PATH)
                     cur = conn_db.cursor()
+
+                    # Общие счётчики
                     cur.execute("SELECT COUNT(*) FROM candles")
                     total_c = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM orderbook_snapshots")
                     total_ob = cur.fetchone()[0]
                     cur.execute("SELECT COUNT(*) FROM liquidations")
                     total_liq = cur.fetchone()[0]
+
+                    # Spot vs Futures (по market_type)
+                    cur.execute("SELECT COUNT(*) FROM candles WHERE market_type='spot'")
+                    spot_c = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM candles WHERE market_type='futures'")
+                    fut_c = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM orderbook_snapshots WHERE market_type='spot'")
+                    spot_ob = cur.fetchone()[0]
+                    cur.execute("SELECT COUNT(*) FROM orderbook_snapshots WHERE market_type='futures'")
+                    fut_ob = cur.fetchone()[0]
+
+                    # За последние 24 часа
+                    day_ago = int((time.time() - 86400) * 1000)
+                    cur.execute(
+                        "SELECT COUNT(*) FROM liquidations WHERE timestamp >= ?",
+                        (day_ago,),
+                    )
+                    liq_24h = cur.fetchone()[0]
                     conn_db.close()
+
                     db_mb = DB_PATH.stat().st_size / 1024 / 1024
                     import psutil
                     disk2 = psutil.disk_usage("/")
+
+                    # Uptime
+                    uptime_sec = time.time() - psutil.boot_time()
+                    uptime_d = int(uptime_sec // 86400)
+                    uptime_h = int((uptime_sec % 86400) // 3600)
+
                     await _send(
                         f"📊 <b>Ежедневный дайджест VPS</b>\n"
                         f"━━━━━━━━━━━━━━━━\n"
-                        f"🕯 Свечей: <b>{total_c:,}</b>\n"
-                        f"📖 Снимков стакана: <b>{total_ob:,}</b>\n"
-                        f"💥 Ликвидаций: <b>{total_liq:,}</b>\n"
-                        f"💾 БД: <b>{db_mb:.1f} MB</b> | Диск: {disk2.percent}%\n"
+                        f"🕯 Свечи: <b>{total_c:,}</b> (spot {spot_c:,} / fut {fut_c:,})\n"
+                        f"📖 Стаканы: <b>{total_ob:,}</b> (spot {spot_ob:,} / fut {fut_ob:,})\n"
+                        f"💥 Ликвидации: <b>{total_liq:,}</b> (за сутки: {liq_24h:,})\n"
+                        f"💾 БД: <b>{db_mb:.1f} MB</b> | Диск: {disk2.percent}% (свободно {disk2.free // 1024**3:.1f} GB)\n"
+                        f"⏱ Uptime: <b>{uptime_d}d {uptime_h}h</b>\n"
                         f"━━━━━━━━━━━━━━━━\n"
                         f"⏰ {now.strftime('%Y-%m-%d %H:%M UTC')}"
                     )
