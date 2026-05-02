@@ -20,10 +20,12 @@
 
 ## Проект на VPS
 
-- **Путь проекта:** `/opt/collector/`
-- **Сервис:** `crypto-telemetry` (systemd)
-- **Telemetry server:** порт 8800 (FastAPI)
+- **Путь проекта:** `/root/crypto-telemetry/` (НЕ `/opt/collector/`)
+- **БД:** `/root/crypto-telemetry/data/telemetry.db`
+- **Сервис collector:** `crypto-telemetry.service` (systemd) — RUN_MODE=collector
+- **Сервис API:** `crypto-telemetry-api.service` (systemd) — uvicorn server.py :8800
 - **REST API:** `http://localhost:8800/...?api_key=vps_telemetry_key_2026`
+- **Telegram Bot:** long-polling внутри collector (команды: /summary, /status, /health, /symbols, /backfill, /errors, /help)
 
 ## Аутентификация
 
@@ -68,31 +70,47 @@ ssh -o StrictHostKeyChecking=no root@132.243.235.173 'команда'
 ```powershell
 # --- По паролю (plink) ---
 
-# Статус сервиса
+# Статус collector
 & 'C:\tools\plink.exe' -batch -ssh -pw 'Tppy9h63FG6Sv' `
     -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
     root@132.243.235.173 'systemctl status crypto-telemetry'
+
+# Статус API
+& 'C:\tools\plink.exe' -batch -ssh -pw 'Tppy9h63FG6Sv' `
+    -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
+    root@132.243.235.173 'systemctl status crypto-telemetry-api'
 
 # Логи collector
 & 'C:\tools\plink.exe' -batch -ssh -pw 'Tppy9h63FG6Sv' `
     -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
     root@132.243.235.173 'journalctl -u crypto-telemetry --no-pager -n 50'
 
-# Перезапуск сервиса
+# Перезапуск collector
 & 'C:\tools\plink.exe' -batch -ssh -pw 'Tppy9h63FG6Sv' `
     -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
     root@132.243.235.173 'systemctl restart crypto-telemetry'
 
+# Деплой: git pull + перезапуск collector
+& 'C:\tools\plink.exe' -batch -ssh -pw 'Tppy9h63FG6Sv' `
+    -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
+    root@132.243.235.173 'cd /root/crypto-telemetry && git pull origin main && systemctl restart crypto-telemetry && systemctl restart crypto-telemetry-api && echo OK_DONE'
+
 # --- По ключу (ssh) ---
 
-# Статус сервиса
+# Статус collector
 ssh -o StrictHostKeyChecking=no root@132.243.235.173 'systemctl status crypto-telemetry'
+
+# Статус API
+ssh -o StrictHostKeyChecking=no root@132.243.235.173 'systemctl status crypto-telemetry-api'
 
 # Логи collector
 ssh -o StrictHostKeyChecking=no root@132.243.235.173 'journalctl -u crypto-telemetry --no-pager -n 50'
 
-# Перезапуск сервиса
+# Перезапуск collector
 ssh -o StrictHostKeyChecking=no root@132.243.235.173 'systemctl restart crypto-telemetry'
+
+# Деплой: git pull + перезапуск обоих сервисов
+ssh -o StrictHostKeyChecking=no root@132.243.235.173 'cd /root/crypto-telemetry && git pull origin main && systemctl restart crypto-telemetry && systemctl restart crypto-telemetry-api && echo OK_DONE'
 
 # REST API через localhost на VPS (curl)
 ssh -o StrictHostKeyChecking=no root@132.243.235.173 'curl -s http://localhost:8800/status?api_key=vps_telemetry_key_2026'
@@ -105,13 +123,13 @@ ssh -o StrictHostKeyChecking=no root@132.243.235.173 'curl -s http://localhost:8
 ```powershell
 & 'C:\tools\pscp.exe' -batch -pw 'Tppy9h63FG6Sv' `
     -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
-    'C:\путь\к\файлу.py' 'root@132.243.235.173:/opt/collector/data/файл.py'
+    'C:\путь\к\файлу.py' 'root@132.243.235.173:/root/crypto-telemetry/scripts/файл.py'
 ```
 
 ### scp (по ключу, без пароля)
 
 ```powershell
-scp -o StrictHostKeyChecking=no 'C:\путь\к\файлу.py' root@132.243.235.173:/opt/collector/data/файл.py
+scp -o StrictHostKeyChecking=no 'C:\путь\к\файлу.py' root@132.243.235.173:/root/crypto-telemetry/scripts/файл.py
 ```
 
 ## REST API VPS (без SSH)
@@ -130,4 +148,12 @@ Invoke-WebRequest -Uri 'http://132.243.235.173:8800/data/status?api_key=vps_tele
 
 # Перезапуск модуля (futures_ws / spot_ws / rest_poller / service)
 Invoke-WebRequest -Uri 'http://132.243.235.173:8800/commands/restart/futures_ws?api_key=vps_telemetry_key_2026' -Method POST
+```
+
+## Быстрый деплой (одна команда)
+
+```powershell
+& 'C:\tools\plink.exe' -batch -ssh -pw 'Tppy9h63FG6Sv' `
+    -hostkey 'ssh-ed25519 255 SHA256:2qbP/giHPeMqFA55iVkzMR7AcKMTLbog9XzekgNWul4' `
+    root@132.243.235.173 'cd /root/crypto-telemetry && git pull origin main && systemctl restart crypto-telemetry && systemctl restart crypto-telemetry-api && echo OK_DONE'
 ```
