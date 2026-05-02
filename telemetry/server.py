@@ -294,6 +294,20 @@ def _serialise(data: Any) -> Any:
     return data
 
 
+# ── Рассылка сообщений всем WS клиентам ────────────────────────────────────
+async def _broadcast(message: dict) -> None:
+    """Отправляет JSON-сообщение всем подключённым WS клиентам."""
+    payload = json.dumps(message, default=str)
+    dead: list[WebSocket] = []
+    for ws in list(_ws_clients):
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _ws_clients.discard(ws)
+
+
 # ── Фоновая задача: трансляция Event Bus → WS клиенты ──────────────────────
 async def _broadcast_loop() -> None:
     """Подписывается на Event Bus и транслирует события всем WS клиентам."""
