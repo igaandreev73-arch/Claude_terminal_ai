@@ -231,3 +231,16 @@
 - **Файлы:** `plans/bingx-api-docs.md` (новый)
 - **Тесты:** не требуются (документация)
 - **Статус:** ✅ Готово
+
+## [Fix] Добавлена подписка на trade.raw в _run_collector() — 2026-05-02
+- **Время:** 13:43 MSK
+- **Что сделано:
+  - Обнаружена проблема: в `_run_collector()` отсутствовала подписка на `trade.raw` (spot) и `futures.trade.raw` (futures)
+  - Спотовые сделки публикуются как `"trade.raw"` с объектом `Trade` (pydantic) из `bingx_ws.py:_on_trade()`
+  - Фьючерсные сделки публикуются как `"futures.trade.raw"` со словарём из `bingx_futures_ws.py:_emit_trade()`
+  - Модель `TradeRawModel` существовала, но никто в неё не писал
+  - Добавлен обработчик `_on_trade_raw()` с `on_conflict_do_nothing(index_elements=["trade_id"])`
+  - Обработчик универсальный: поддерживает и pydantic-объекты (spot) и dict (futures)
+- **Файлы:** `main.py`
+- **Тесты:** не запускались (изменение только runtime-логики collector)
+- **Статус:** ✅ Готово (требуется пуш на VPS и перезапуск collector)

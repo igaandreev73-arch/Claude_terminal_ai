@@ -95,6 +95,38 @@ async def _run_collector() -> None:
     # Снимки стакана в БД
     event_bus.subscribe("ob.snapshot", lambda e: ob_repo.save_from_event(e.data))
 
+    # Сделки (trades_raw) в БД — spot
+    async def _on_trade_raw(event: Event) -> None:
+        """Сохраняет сырые сделки в БД."""
+        from storage.database import get_session_factory
+        from storage.models import TradeRawModel
+        from sqlalchemy.dialects.sqlite import insert as si
+        try:
+            t = event.data
+            # t может быть pydantic Trade (spot) или dict (futures)
+            if hasattr(t, "model_dump"):
+                d = t.model_dump()
+            else:
+                d = t
+            factory = get_session_factory()
+            async with factory() as session:
+                stmt = si(TradeRawModel).values(
+                    symbol=d.get("symbol", ""),
+                    timestamp=int(d.get("timestamp", 0)),
+                    price=float(d.get("price", 0)),
+                    quantity=float(d.get("quantity", 0)),
+                    side=d.get("side", "unknown"),
+                    trade_id=str(d.get("trade_id", "")),
+                    market_type=d.get("market_type", "spot"),
+                ).on_conflict_do_nothing(index_elements=["trade_id"])
+                await session.execute(stmt)
+                await session.commit()
+        except Exception as exc:
+            log.error(f"Ошибка записи сделки в БД: {exc}")
+
+    event_bus.subscribe("trade.raw", _on_trade_raw)
+    event_bus.subscribe("futures.trade.raw", _on_trade_raw)
+
     # Ликвидации в БД
     async def _on_liquidation(event):
         import time as _t
